@@ -72,6 +72,12 @@ describe('FileSystem', () => {
 				.addFile(emptyFile)
 				.addFile(notEmptyFile);
 
+      // Sort for deterministic comparison across platforms
+      result.files.sort();
+      result.directories.sort();
+      expected.files.sort();
+      expected.directories.sort();
+
       expect(result).toEqual(expected);
     });
 
@@ -92,7 +98,8 @@ describe('FileSystem', () => {
 			vol.reset();
 			vol.writeFileSync('/file.txt', 'content');
 			const result = await FileSystem.readDirectory(sep);
-			const expected = new FileSystemEntries().addFile('/file.txt');
+			const expectedPath = sep + 'file.txt';
+			const expected = new FileSystemEntries().addFile(expectedPath);
 			expect(result).toEqual(expected);
 		});
   });

@@ -172,7 +172,7 @@ describe('FileSystemEventManager', () => {
 	describe('handleWatchrError()', () => {
 		it('should handle watcher errors correctly', () => {
 			const errorSpy = vi.spyOn(watchr, 'error').mockImplementation(() => true);
-			const error = { message: 'Test error', code: 'EPERM' } as NodeJS.ErrnoException;
+			const error = { message: 'Test error', code: 'ENOENT' } as NodeJS.ErrnoException;
 
 			(fileSystemEventManager as any).handleWatchrError(error);
 

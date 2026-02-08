@@ -1,0 +1,74 @@
+{
+  "name": "@d1g1tal/watchr",
+  "version": "1.0.0",
+  "description": "A native NodeJS file system watcher with optional rename detection support. Forked from github:fabiospampinato/watcher",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "author": "D1g1talEntr0py",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/D1g1talEntr0py/watchr.git"
+  },
+  "homepage": "https://github.com/D1g1talEntr0py/watchr#readme",
+  "bugs": {
+    "url": "https://github.com/D1g1talEntr0py/watchr/issues"
+  },
+  "keywords": [
+    "fs",
+    "file",
+    "system",
+    "filesystem",
+    "watch",
+    "watcher",
+    "watchr",
+    "file-watcher",
+    "fs.watch",
+    "recursive",
+    "inode",
+    "rename-detection",
+    "typescript"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "node esbuild.config.ts",
+    "build:watch": "tsc --watch --emitDeclarationOnly",
+    "type-check": "tsc --noEmit",
+    "lint": "eslint ./src",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^25.2.2",
+    "@typescript-eslint/eslint-plugin": "^8.54.0",
+    "@typescript-eslint/parser": "^8.54.0",
+    "@vitest/coverage-v8": "^4.0.18",
+    "esbuild": "^0.27.3",
+    "eslint": "^10.0.0",
+    "eslint-plugin-jsdoc": "^62.5.4",
+    "memfs": "^4.56.10",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.54.0",
+    "vitest": "^4.0.18"
+  },
+  "engines": {
+    "node": ">=20.16.0"
+  },
+  "packageManager": "pnpm@10.29.1"
+}

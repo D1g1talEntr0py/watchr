@@ -1,11 +1,12 @@
 # Watchr
 
-[![npm version](https://img.shields.io/npm/v/@d1g1tal/watchr.svg)](https://www.npmjs.com/package/@d1g1tal/watchr)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Node.js Version](https://img.shields.io/badge/node-%3E%3D22.x-brightgreen.svg)](https://nodejs.org/)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.0%2B-blue.svg)](https://www.typescriptlang.org/)
-[![Tests](https://github.com/D1g1talEntr0py/watchr/actions/workflows/test.yml/badge.svg)](https://github.com/D1g1talEntr0py/watchr/actions/workflows/test.yml)
-[![Coverage Status](https://coveralls.io/repos/github/D1g1talEntr0py/watchr/badge.svg?branch=main)](https://coveralls.io/github/D1g1talEntr0py/watchr?branch=main)
+[![npm version](https://img.shields.io/npm/v/@d1g1tal/watchr?color=blue)](https://www.npmjs.com/package/@d1g1tal/watchr)
+[![npm downloads](https://img.shields.io/npm/dm/@d1g1tal/watchr)](https://www.npmjs.com/package/@d1g1tal/watchr)
+[![CI](https://github.com/D1g1talEntr0py/watchr/actions/workflows/ci.yml/badge.svg)](https://github.com/D1g1talEntr0py/watchr/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/D1g1talEntr0py/watchr/graph/badge.svg)](https://codecov.io/gh/D1g1talEntr0py/watchr)
+[![License: MIT](https://img.shields.io/github/license/D1g1talEntr0py/watchr)](https://github.com/D1g1talEntr0py/watchr/blob/main/LICENSE)
+[![Node.js](https://img.shields.io/node/v/@d1g1tal/watchr)](https://nodejs.org)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 
 > **⚠️ Important Notice**: This is a personal fork of [`Watcher`](https://github.com/fabiospampinato/watcher) by [Fabio Spampinato](https://github.com/fabiospampinato), modified to fit specific personal needs and experimentation. **Most users should use the original [Watcher](https://github.com/fabiospampinato/watcher) library instead**, which is actively maintained, battle-tested, and feature-complete.
 

@@ -3,7 +3,7 @@
 [![npm version](https://img.shields.io/npm/v/@d1g1tal/watchr.svg)](https://www.npmjs.com/package/@d1g1tal/watchr)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Node.js Version](https://img.shields.io/badge/node-%3E%3D22.x-brightgreen.svg)](https://nodejs.org/)
-[![TypeScript](https://img.shields.io/badge/TypeScript-6.0%2B-blue.svg)](https://www.typescriptlang.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.0%2B-blue.svg)](https://www.typescriptlang.org/)
 [![Tests](https://github.com/D1g1talEntr0py/watchr/actions/workflows/test.yml/badge.svg)](https://github.com/D1g1talEntr0py/watchr/actions/workflows/test.yml)
 [![Coverage Status](https://coveralls.io/repos/github/D1g1talEntr0py/watchr/badge.svg?branch=main)](https://coveralls.io/github/D1g1talEntr0py/watchr?branch=main)
 
@@ -13,7 +13,7 @@ A modern, TypeScript-first file system watcher built on Node.js native APIs.
 
 ## Features
 
-- **Native Performance**: Built on Node.js native `fs.watch` with recursive watching support (Node.js 20.16+)
+- **Native Performance**: Built on Node.js native `fs.watch` with recursive watching support (Node.js 22.x+)
 - **TypeScript First**: Written entirely in TypeScript with comprehensive type definitions
 - **Event-Driven Architecture**: Clean, EventEmitter-based API for handling file system events
 - **Rename Detection**: Optional detection of file and directory renames with configurable timeouts
@@ -284,7 +284,7 @@ setTimeout(() => watcher.close(), 10000);
 
 ## Requirements
 
-- Node.js 20.16.0 or higher
+- Node.js 22.x or higher
 - TypeScript 6.0.0 or higher (for TypeScript projects)
 
 ## Why Use the Original Watcher Instead?

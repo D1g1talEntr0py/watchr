@@ -51,24 +51,27 @@
     "lint": "eslint ./src",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "release:patch": "pnpm version patch && git push --follow-tags",
+    "release:minor": "pnpm version minor && git push --follow-tags",
+    "release:major": "pnpm version major && git push --follow-tags"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@types/node": "^25.2.2",
-    "@typescript-eslint/eslint-plugin": "^8.54.0",
-    "@typescript-eslint/parser": "^8.54.0",
+    "@types/node": "^25.3.0",
+    "@typescript-eslint/eslint-plugin": "^8.56.1",
+    "@typescript-eslint/parser": "^8.56.1",
     "@vitest/coverage-v8": "^4.0.18",
     "esbuild": "^0.27.3",
-    "eslint": "^10.0.0",
-    "eslint-plugin-jsdoc": "^62.5.4",
+    "eslint": "^10.0.2",
+    "eslint-plugin-jsdoc": "^62.7.1",
     "memfs": "^4.56.10",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.54.0",
+    "typescript-eslint": "^8.56.1",
     "vitest": "^4.0.18"
   },
   "engines": {
     "node": ">=22.0.0"
   },
-  "packageManager": "pnpm@10.29.1"
+  "packageManager": "pnpm@10.29.2"
 }

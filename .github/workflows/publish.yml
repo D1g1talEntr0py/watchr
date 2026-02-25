@@ -1,52 +1,31 @@
-name: Publish to npm
+name: Release
 
 on:
-  release:
-    types: [published]
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  id-token: write
 
 jobs:
-  publish:
-    name: Publish to npm
+  release:
     runs-on: ubuntu-latest
-
-    permissions:
-      contents: read
-      id-token: write
-
+    environment: npm
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
         with:
-          node-version: '22.x'
-          cache: 'pnpm'
-          registry-url: 'https://registry.npmjs.org'
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Update npm for trusted publishing
-        run: npm install -g npm@latest
-
-      - name: Run linter
-        run: pnpm lint
-
-      - name: Type check
-        run: pnpm type-check
-
-      - name: Build
-        run: pnpm build
-
-      - name: Run tests
-        run: pnpm test
-
-      - name: Set version from release tag
-        run: npm version ${GITHUB_REF_NAME#v} --no-git-tag-version
-
-      - name: Publish to npm
-        run: npm publish --access public
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+          cache: pnpm
+      - run: npm config set "//registry.npmjs.org/:_authToken" ""
+      - run: pnpm install --frozen-lockfile
+      - run: npx -y -p semantic-release -p @semantic-release/changelog -p @semantic-release/git -p @semantic-release/exec -p conventional-changelog-conventionalcommits semantic-release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_CONFIG_PROVENANCE: 'true'

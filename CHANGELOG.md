@@ -1,3 +1,9 @@
+## [1.0.2](https://github.com/D1g1talEntr0py/watchr/compare/v1.0.1...v1.0.2) (2026-03-07)
+
+### Bug Fixes
+
+* **release:** added --no-git-checks to config (cf3c69acc7bd306c1492ac7fc63d36e30720708f)
+
 ## [1.0.1](https://github.com/D1g1talEntr0py/watchr/compare/v1.0.0...v1.0.1) (2026-03-07)
 
 ### Bug Fixes

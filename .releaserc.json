@@ -31,7 +31,7 @@
     "@semantic-release/changelog",
     ["@semantic-release/npm", { "npmPublish": false }],
     ["@semantic-release/exec", {
-      "prepareCmd": "npm pack",
+      "prepareCmd": "npm lint && npm -s build && npm pack",
       "publishCmd": "npm publish --provenance"
     }],
     ["@semantic-release/git", {
@@ -39,7 +39,7 @@
       "message": "chore(release): ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}"
     }],
     ["@semantic-release/github", {
-      "assets": [{ "path": "d1g1tal-tsbuild-*.tgz" }]
+      "assets": [{ "path": "d1g1tal-watchr-*.tgz" }]
     }]
   ]
 }

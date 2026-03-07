@@ -1,3 +1,13 @@
+## [1.0.3](https://github.com/D1g1talEntr0py/watchr/compare/v1.0.2...v1.0.3) (2026-03-07)
+
+### Bug Fixes
+
+* clear the restore timeout resources in the close() method (344870c0f55833412531db723a8759714d52173b)
+
+### Miscellaneous Chores
+
+* **ci:** add commit message git hook (b3f7b99b0a1398411f7dc8b8a61b8f46adadb1fd)
+
 ## [1.0.2](https://github.com/D1g1talEntr0py/watchr/compare/v1.0.1...v1.0.2) (2026-03-07)
 
 ### Bug Fixes

@@ -1,6 +1,6 @@
 import * as esbuild from 'esbuild';
 import ts from 'typescript';
-import { addJsExtensionPlugin } from './build/extension-plugin.ts';
+import { addJsExtensionPlugin } from './build/extension-plugin';
 import { access, constants, readdir, rm } from 'fs/promises';
 import { join } from 'path';
 

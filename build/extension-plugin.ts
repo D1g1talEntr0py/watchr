@@ -1,5 +1,5 @@
-import type { Plugin, OnLoadArgs, OnLoadResult } from 'esbuild';
 import { readFile } from 'node:fs/promises';
+import type { Plugin, OnLoadArgs, OnLoadResult } from 'esbuild';
 
 /**
  * esbuild plugin that adds .js extensions to relative imports in TypeScript files.
@@ -15,11 +15,8 @@ export const addJsExtensionPlugin: Plugin = {
 	 */
 	setup(build) {
 		build.onLoad({ filter: /\.tsx?$/ }, async (args: OnLoadArgs): Promise<OnLoadResult> => {
-			const source = await readFile(args.path, 'utf8');
-			const contents = source.replace(
-				/(from\s+['"])((\.\.?\/)(?:(?!\.js).)+)(['"])/g,
-				'$1$2.js$4'
-			);
+			const contents = (await readFile(args.path, 'utf8')).replace(/(from\s+['"])((\.\.?\/)(?:(?!\.js).)+)(['"])/g, '$1$2.js$4');
+
 			return { contents, loader: 'ts' };
 		});
 	},

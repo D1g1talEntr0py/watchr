@@ -1,25 +1,66 @@
 {
   "name": "@d1g1tal/watchr",
+	"author": "D1g1talEntr0py",
   "version": "1.0.0",
+	"license": "MIT",
   "description": "A native NodeJS file system watcher with optional rename detection support. Forked from github:fabiospampinato/watcher",
+	"homepage": "https://github.com/D1g1talEntr0py/watchr#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/D1g1talEntr0py/watchr.git"
+  },
+  "bugs": {
+    "url": "https://github.com/D1g1talEntr0py/watchr/issues"
+  },
+  "maintainers": [
+    {
+      "name": "D1g1talEntr0py",
+      "email": "jason.dimeo@gmail.com"
+    }
+  ],
+  "engines": {
+    "node": ">=22.0.0"
+  },
+	"packageManager": "pnpm@10.30.3",
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
+  },
   "type": "module",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     }
   },
-  "author": "D1g1talEntr0py",
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/D1g1talEntr0py/watchr.git"
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "node esbuild.config.ts",
+    "build:watch": "tsc --watch --emitDeclarationOnly",
+    "type-check": "tsc --noEmit",
+    "lint": "eslint ./src",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:watch": "vitest",
+		"prepublishOnly": "pnpm lint && pnpm build"
   },
-  "homepage": "https://github.com/D1g1talEntr0py/watchr#readme",
-  "bugs": {
-    "url": "https://github.com/D1g1talEntr0py/watchr/issues"
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^25.3.5",
+    "@typescript-eslint/eslint-plugin": "^8.56.1",
+    "@typescript-eslint/parser": "^8.56.1",
+    "@vitest/coverage-v8": "^4.0.18",
+    "esbuild": "^0.27.3",
+    "eslint": "^10.0.3",
+    "eslint-plugin-jsdoc": "^62.7.1",
+    "memfs": "^4.56.11",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.56.1",
+    "vitest": "^4.0.18"
   },
   "keywords": [
     "fs",
@@ -35,43 +76,5 @@
     "inode",
     "rename-detection",
     "typescript"
-  ],
-  "publishConfig": {
-    "access": "public"
-  },
-  "files": [
-    "dist",
-    "README.md",
-    "LICENSE"
-  ],
-  "scripts": {
-    "build": "node esbuild.config.ts",
-    "build:watch": "tsc --watch --emitDeclarationOnly",
-    "type-check": "tsc --noEmit",
-    "lint": "eslint ./src",
-    "test": "vitest run",
-    "test:coverage": "vitest run --coverage",
-    "test:watch": "vitest",
-    "release:patch": "pnpm version patch && git push --follow-tags",
-    "release:minor": "pnpm version minor && git push --follow-tags",
-    "release:major": "pnpm version major && git push --follow-tags"
-  },
-  "devDependencies": {
-    "@eslint/js": "^10.0.1",
-    "@types/node": "^25.3.0",
-    "@typescript-eslint/eslint-plugin": "^8.56.1",
-    "@typescript-eslint/parser": "^8.56.1",
-    "@vitest/coverage-v8": "^4.0.18",
-    "esbuild": "^0.27.3",
-    "eslint": "^10.0.2",
-    "eslint-plugin-jsdoc": "^62.7.1",
-    "memfs": "^4.56.10",
-    "typescript": "^5.9.3",
-    "typescript-eslint": "^8.56.1",
-    "vitest": "^4.0.18"
-  },
-  "engines": {
-    "node": ">=22.0.0"
-  },
-  "packageManager": "pnpm@10.29.2"
+  ]
 }

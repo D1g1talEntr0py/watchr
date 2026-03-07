@@ -118,6 +118,13 @@ class Watchr extends EventEmitter implements Closable {
 		this.roots.clear();
 		this.watchersClose();
 
+		// Clear watcher restoration timeout and restorable watchers
+		if (this.watchersRestoreTimeout) {
+			clearTimeout(this.watchersRestoreTimeout);
+			delete this.watchersRestoreTimeout;
+		}
+		this.watchersRestorable = {};
+
 		if (this.isClosed()) { return }
 
 		this.closed = true;
@@ -183,6 +190,8 @@ class Watchr extends EventEmitter implements Closable {
 	/** Restores the watchers from a previous state */
 	private watchersRestore(): void {
 		delete this.watchersRestoreTimeout;
+
+		if (this.isClosed()) { return }
 
 		const restorable = { ...this.watchersRestorable };
 		this.watchersRestorable = {};

@@ -2,7 +2,6 @@
 	"compilerOptions": {
 		"strict": true,
 		"declaration": true,
-		"esModuleInterop": true,
 		"isolatedModules": true,
 		"isolatedDeclarations": true,
 		"importHelpers": false,
@@ -13,11 +12,11 @@
 		"allowUnreachableCode": false,
 		"noImplicitOverride": true,
 		"noImplicitReturns": true,
-		"target": "ES2024",
+		"target": "ESNext",
 		"module": "ESNext",
 		"moduleDetection": "force",
 		"moduleResolution": "Bundler",
-		"lib": [ "ES2024" ],
+		"lib": [ "ESNext" ],
 		"outDir": "./dist",
 		"rootDir": "./src"
 	},

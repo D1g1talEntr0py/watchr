@@ -145,6 +145,8 @@ describe('Race Condition Fixes', () => {
 	it('should handle constructor error scenarios gracefully', async () => {
 		const nonExistentPath = './non-existent-path-that-should-not-exist';
 		const watcher = new Watchr(nonExistentPath);
+		const errors: Error[] = [];
+		watcher.on('error', (error: Error) => errors.push(error));
 
 		try {
 			// Should not throw immediately
@@ -154,7 +156,9 @@ describe('Race Condition Fixes', () => {
 			// Wait a bit to see if any errors occur
 			await setTimeoutPromise(100);
 
-			// Watcher should still be valid (it will watch for the path to be created)
+			// Error should have been emitted (not thrown) for the non-existent path
+			expect(errors.length).toBeGreaterThan(0);
+			// Watcher should still be valid after an error (not closed)
 			expect(watcher.isClosed()).toBe(false);
 		} finally {
 			if (!watcher.isClosed()) {

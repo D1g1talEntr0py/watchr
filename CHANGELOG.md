@@ -1,3 +1,23 @@
+## [1.0.4](https://github.com/D1g1talEntr0py/watchr/compare/v1.0.3...v1.0.4) (2026-03-18)
+
+### Bug Fixes
+
+* **security:** patch CVE-2026-32141 (a1b1595de1b65d7e4defb7f791a09deba0903bfb)
+Addresses a race condition where initializing a watcher on a non-existent path can cause unhandled exceptions. Errors are now gracefully emitted through the watcher's event bus instead of throwing directly, preventing potential crash vulnerabilities and bringing the implementation into compliance with CVE-2026-32141.
+
+
+### Miscellaneous Chores
+
+* cleanup files (32217d28107210f915858e438066cbe3c2ffff8b)
+* **deps:** update developer dependencies and tooling configurations (d9873a4e9608c3ed1ed5b091dff0004dab3ee9ae)
+Bumps packageManager to a newer pnpm version, bumps core devDependencies including eslint, vitest, and typescript-eslint setups, and introduces the @rolldown/plugin-babel dependency. Also adds a specific tsconfig.json for tests and updates the configured vitest execution environment.
+
+
+### Continuous Integration
+
+* bump GitHub Actions workflow versions (69d5bcdab3636b85730cab2049fe01c11e0fb30e)
+Updates Github Actions standard uses, including `actions/checkout` to v6, `pnpm/action-setup` to v5, and `actions/setup-node` to v6. Modifies standard publish procedures to manually enforce getting latest npm versions as necessary for semantic release.
+
 ## [1.0.3](https://github.com/D1g1talEntr0py/watchr/compare/v1.0.2...v1.0.3) (2026-03-07)
 
 ### Bug Fixes

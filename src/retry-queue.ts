@@ -35,7 +35,7 @@ export class RetryQueue {
 	 * Adds a resolver function to the pending queue and processes the queue if necessary.
 	 * @param fn - The resolver function to add.
 	 */
-	private add(fn: Resolver): void {
+	private add(fn: Resolver) {
 		this.pendingQueue.add(fn);
 
 		// Active queue not under pressure, executing immediately
@@ -52,7 +52,7 @@ export class RetryQueue {
 	 * This method is called at regular intervals to ensure that pending tasks are processed.
 	 * @returns void
 	 */
-	private processQueue(): void {
+	private processQueue() {
 		if (fileDescriptorLimit <= this.activeQueue.size) { return }
 		if (!this.pendingQueue.size) { return this.reset() }
 
@@ -68,7 +68,7 @@ export class RetryQueue {
 	}
 
 	/** Resets the interval for processing the queue */
-	private reset(): void {
+	private reset() {
 		if (!this.intervalId) { return }
 
 		clearInterval(this.intervalId);

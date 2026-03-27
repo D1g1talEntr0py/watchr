@@ -42,7 +42,7 @@ export class FileSystemEventManager {
 	 * @param watcherConfig The watcher configuration
 	 * @returns A Promise of a FileSystemEventManager
 	 */
-	static async newInstance(fileSystemPoller: FileSystemStateManager, watchr: Watchr, watcherConfig: WatchrConfig): Promise<FileSystemEventManager> {
+	static async newInstance(fileSystemPoller: FileSystemStateManager, watchr: Watchr, watcherConfig: WatchrConfig) {
 		return new FileSystemEventManager(fileSystemPoller, watchr, watcherConfig).initializeEvents();
 	}
 
@@ -50,7 +50,7 @@ export class FileSystemEventManager {
 	 * Initializes event listeners and handles initial scan
 	 * @returns A Promise that resolves to a FileSystemEventManager
 	 */
-	private async initializeEvents(): Promise<FileSystemEventManager> {
+	private async initializeEvents() {
 		this.watcher.on(NodeWatcherEvent.CHANGE, this.onWatcherChange.bind(this));
 		this.watcher.on(NodeWatcherEvent.ERROR, this.handleWatchrError.bind(this));
 
@@ -85,7 +85,7 @@ export class FileSystemEventManager {
 	 * @param targetPath The path to check
 	 * @returns True if the path is within the watched root, false otherwise
 	 */
-	private isSubRoot(targetPath: Path): boolean {
+	private isSubRoot(targetPath: Path) {
 		return this.filePath ? targetPath === this.filePath : targetPath === this.folderPath || FileSystem.isSubPath(this.folderPath, targetPath);
 	}
 
@@ -101,7 +101,7 @@ export class FileSystemEventManager {
 	 * Flushes the current event batch
 	 */
 	@debounce(debounceWait)
-	private flush(): void {
+	private flush() {
 		if (this.watchr.isClosed()) { return }
 
 		this.lock = this.getLock();
@@ -113,7 +113,7 @@ export class FileSystemEventManager {
 	 * Generates a Node event handler
 	 * @returns A NodeEventHandler
 	 */
-	private generateNodeEventHandler(): NodeEventHandler {
+	private generateNodeEventHandler() {
 		return async (_event: NodeTargetEvent, targetPath: Path = '', isInitial: boolean = false): Promise<void> => {
 			if (isInitial) {
 				// Poll immediately
@@ -132,7 +132,7 @@ export class FileSystemEventManager {
 	 * @param events The events to deduplicate
 	 * @returns The deduplicated events
 	 */
-	private deduplicateEvents(events: Event[]): Event[] {
+	private deduplicateEvents(events: Event[]) {
 		if (events.length < 2) { return events }
 
 		const previousEventTargets = new Map<Path, FileSystemEvent>();
@@ -161,7 +161,7 @@ export class FileSystemEventManager {
 	 * @param events The events to populate
 	 * @returns The populated events
 	 */
-	private async populateEvents(targetPaths: Path[], events: Event[] = []): Promise<Event[]> {
+	private async populateEvents(targetPaths: Path[], events: Event[] = []) {
 		await Promise.all(targetPaths.map(async (targetPath) => {
 			for (const event of await this.fileSystemPoller.update(targetPath)) {
 				events.push([ event, targetPath ]);
@@ -175,7 +175,7 @@ export class FileSystemEventManager {
 	 * Handles the given target events
 	 * @param events The target events to handle
 	 */
-	private onTargetEvents(events: Event[]): void {
+	private onTargetEvents(events: Event[]) {
 		for (const [ targetEvent, targetPath ] of events) {
 			if (targetEvent === FileSystemEvent.UNLINK) {
 				this.watchr.watchersClose(dirname(targetPath), targetPath);
@@ -201,7 +201,7 @@ export class FileSystemEventManager {
 	 * @param isInitial Whether this is an initial event
 	 * @returns A Promise that resolves when the event is handled
 	 */
-	private onWatcherEvent(event: NodeTargetEvent, targetPath?: Path, isInitial: boolean = false): Promise<void> {
+	private onWatcherEvent(event: NodeTargetEvent, targetPath?: Path, isInitial: boolean = false) {
 		return this.nodeEventHandler(event, targetPath, isInitial);
 	}
 
@@ -210,7 +210,7 @@ export class FileSystemEventManager {
 	 * @param event The watcher change event to handle
 	 * @param targetName The target name of the event
 	 */
-	private onWatcherChange(event: NodeTargetEvent = NodeTargetEvent.CHANGE, targetName: string = ''): void {
+	private onWatcherChange(event: NodeTargetEvent = NodeTargetEvent.CHANGE, targetName: string = '') {
 		if (this.watchr.isClosed()) { return }
 
 		const targetPath = resolve(this.folderPath, targetName);
@@ -224,7 +224,7 @@ export class FileSystemEventManager {
 	 * Handles the given watcher error event
 	 * @param error The watcher error event to handle
 	 */
-	private handleWatchrError(error: NodeJS.ErrnoException): void {
+	private handleWatchrError(error: NodeJS.ErrnoException) {
 		if (isWindows && error.code === 'EPERM') {
 			// EPERM can be thrown on Windows when a file is locked by another process.
 			// In this case, we can't do anything but wait for the file to be unlocked.

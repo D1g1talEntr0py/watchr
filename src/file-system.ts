@@ -31,7 +31,7 @@ export class FileSystem {
 	 * @param param1 - Options for reading the directory.
 	 * @returns A promise that resolves to a FileSystemEntries object containing the directory contents.
 	 */
-	static async readDirectory(rootPath: string, { ignore = () => false, signal }: DirectoryReadOptions = {}): Promise<FileSystemEntries> {
+	static async readDirectory(rootPath: string, { ignore = () => false, signal }: DirectoryReadOptions = {}) {
 		const visited = new Set<string>();
 		const fileSystemEntries = new FileSystemEntries();
 
@@ -40,7 +40,7 @@ export class FileSystem {
 		 * @param rootPath - The root path to populate from.
 		 * @returns A promise that resolves when the population is complete.
 		 */
-		const populateResultFromPath = async (rootPath: string): Promise<void> => {
+		const populateResultFromPath = async (rootPath: string) => {
 			if (signal?.aborted) { return }
 
 			const subPathPrefix = `${rootPath}${rootPath === sep ? '' : sep}`;
@@ -116,7 +116,7 @@ export class FileSystem {
 	 * @param subPath - The subpath to check.
 	 * @returns True if the subPath is a subpath of the targetPath, false otherwise.
 	 */
-	static isSubPath(targetPath: string, subPath: string): boolean {
+	static isSubPath(targetPath: string, subPath: string) {
 		// Normalize paths to handle edge cases
 		targetPath = normalize(targetPath);
 		subPath = normalize(subPath);

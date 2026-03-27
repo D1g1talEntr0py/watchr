@@ -18,7 +18,7 @@ export class LockResolver {
 	 * @param fn - The resolver function to add.
 	 * @param timeout - The timeout duration in milliseconds.
 	 */
-	static add(fn: Resolver, timeout: number): void {
+	static add(fn: Resolver, timeout: number) {
 		LockResolver.resolvers.set(fn, Date.now() + timeout);
 
 		LockResolver.init();
@@ -28,14 +28,14 @@ export class LockResolver {
 	 * Removes a resolver function.
 	 * @param fn - The resolver function to remove.
 	 */
-	static remove(fn: Resolver): void {
+	static remove(fn: Resolver) {
 		LockResolver.resolvers.delete(fn);
 	}
 
 	/**
 	 * Initializes the lock resolver.
 	 */
-	private static init(): void {
+	private static init() {
 		if (LockResolver.intervalId) { return }
 
 		LockResolver.intervalId = setInterval(LockResolver.resolve, LockResolver.interval);
@@ -44,7 +44,7 @@ export class LockResolver {
 	/**
 	 * Resets the lock resolver.
 	 */
-	private static reset(): void {
+	private static reset() {
 		if (!LockResolver.intervalId) { return }
 
 		clearInterval(LockResolver.intervalId);
@@ -55,7 +55,7 @@ export class LockResolver {
 	/**
 	 * Resolves the pending resolver functions.
 	 */
-	private static resolve(): void {
+	private static resolve() {
 		const now = Date.now();
 
 		for (const [ fn, timestamp ] of LockResolver.resolvers) {

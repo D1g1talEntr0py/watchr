@@ -55,7 +55,7 @@ class Watchr extends EventEmitter implements Closable {
 	 * Returns the abort signal for the watcher
 	 * @returns The abort signal for the watcher
 	 */
-	get abortSignal(): AbortSignal {
+	get abortSignal() {
 		return this._abortSignal;
 	}
 
@@ -63,7 +63,7 @@ class Watchr extends EventEmitter implements Closable {
 	 * Returns the ready lock for the watcher
 	 * @returns The ready lock for the watcher
 	 */
-	get readyLock(): Promise<void> {
+	get readyLock() {
 		return this._readyLock;
 	}
 
@@ -71,7 +71,7 @@ class Watchr extends EventEmitter implements Closable {
 	 * Returns the rename handler for the watcher
 	 * @returns The rename handler for the watcher
 	 */
-	get renameWatchr(): FileRenameHandler {
+	get renameWatchr() {
 		return this._renameHandler;
 	}
 
@@ -79,7 +79,7 @@ class Watchr extends EventEmitter implements Closable {
 	 * Adds a watcher configuration to the watcher
 	 * @param config The watcher configuration to add
 	 */
-	addWatcherConfig(config: WatchrConfig): void {
+	addWatcherConfig(config: WatchrConfig) {
 		const { folderPath } = config;
 		(this.watchers[folderPath] = (this.watchers[folderPath] ?? [])).push(config);
 	}
@@ -88,7 +88,7 @@ class Watchr extends EventEmitter implements Closable {
 	 * Checks if the watcher is closed
 	 * @returns True if the watcher is closed, false otherwise
 	 */
-	isClosed(): boolean {
+	isClosed() {
 		return this.closed;
 	}
 
@@ -98,7 +98,7 @@ class Watchr extends EventEmitter implements Closable {
 	 * @param ignore The ignore function to use
 	 * @returns True if the target path is ignored, false otherwise
 	 */
-	isIgnored(targetPath: Path, ignore?: Ignore): boolean {
+	isIgnored(targetPath: Path, ignore?: Ignore) {
 		return ignore?.(targetPath) ?? false;
 	}
 
@@ -106,14 +106,14 @@ class Watchr extends EventEmitter implements Closable {
 	 * Checks if the watcher is ready
 	 * @returns True if the watcher is ready, false otherwise
 	 */
-	isReady(): boolean {
+	isReady() {
 		return this.ready;
 	}
 
 	/**
 	 * Closes the watcher
 	 */
-	close(): void {
+	close() {
 		this._renameHandler.reset();
 		this.roots.clear();
 		this.watchersClose();
@@ -137,7 +137,7 @@ class Watchr extends EventEmitter implements Closable {
 	 * @param exception The error to emit
 	 * @returns True if the event was emitted, false otherwise
 	 */
-	error(exception: unknown): boolean {
+	error(exception: unknown) {
 		if (this.isClosed()) { return false }
 
 		return this.emit(WatcherEvent.ERROR, castError(exception));
@@ -149,7 +149,7 @@ class Watchr extends EventEmitter implements Closable {
 	 * @param targetPath The target path of the event
 	 * @param targetPathNext The next target path of the event
 	 */
-	emitEvent(event: FileSystemEvent, targetPath: Path, targetPathNext?: Path): void {
+	emitEvent(event: FileSystemEvent, targetPath: Path, targetPathNext?: Path) {
 		if (this.isClosed()) { return }
 
 		const targetStats = this._renameHandler.fileStateManager.stats.get(targetPath);
@@ -162,7 +162,7 @@ class Watchr extends EventEmitter implements Closable {
 	 * @param folderPath The folder path to close watchers for
 	 * @param filePath The file path to close watchers for
 	 */
-	watchersClose(folderPath?: Path, filePath?: Path): void {
+	watchersClose(folderPath?: Path, filePath?: Path) {
 		if (!folderPath) {
 			for (const folderPath of Object.keys(this.watchers)) {
 				this.watchersClose(folderPath, filePath);
@@ -179,7 +179,7 @@ class Watchr extends EventEmitter implements Closable {
 	 * Sets the watcher to the ready state
 	 * @returns true if there were any listeners for the ready event, false otherwise
 	 */
-	private setReady(): boolean {
+	private setReady() {
 		if (this.isClosed() || this.isReady()) { return false }
 
 		this.ready = true;
@@ -188,7 +188,7 @@ class Watchr extends EventEmitter implements Closable {
 	}
 
 	/** Restores the watchers from a previous state */
-	private watchersRestore(): void {
+	private watchersRestore() {
 		delete this.watchersRestoreTimeout;
 
 		if (this.isClosed()) { return }
@@ -206,7 +206,7 @@ class Watchr extends EventEmitter implements Closable {
 	 * @param config The configuration for the watcher
 	 * @returns The file system event manager for the new watcher
 	 */
-	private async addWatcher(config: WatchrConfig): Promise<FileSystemEventManager> {
+	private async addWatcher(config: WatchrConfig) {
 		this.addWatcherConfig(config);
 
 		return FileSystemEventManager.newInstance(this._renameHandler.fileStateManager, this, config);
@@ -220,7 +220,7 @@ class Watchr extends EventEmitter implements Closable {
 	 * @param filePath The path of the file to watch (if any)
 	 * @returns A promise that resolves when the watcher is active
 	 */
-	private async watchDirectory(folderPath: Path, options: WatchrOptions, handler?: Handler, filePath?: Path): Promise<void> {
+	private async watchDirectory(folderPath: Path, options: WatchrOptions, handler?: Handler, filePath?: Path) {
 		if (this.isClosed() || this.isIgnored(folderPath, options.ignore)) { return }
 
 		// Node.js 20.16+ supports recursive watching natively on all platforms
@@ -234,7 +234,7 @@ class Watchr extends EventEmitter implements Closable {
 	 * @param callback The callback to execute while the watchers are locked
 	 * @returns A promise that resolves when the callback is complete
 	 */
-	private async synchronizeWatchers(callback: AsyncCallable): Promise<void> {
+	private async synchronizeWatchers(callback: AsyncCallable) {
 		await this._watchersLock;
 
 		return this._watchersLock = callback();
@@ -247,7 +247,7 @@ class Watchr extends EventEmitter implements Closable {
 	 * @param handler The handler to call when changes are detected
 	 * @returns A promise that resolves when the watcher is active
 	 */
-	private async watchFile(filePath: Path, options: WatchrOptions, handler?: Handler): Promise<void> {
+	private async watchFile(filePath: Path, options: WatchrOptions, handler?: Handler) {
 		if (this.isClosed() || this.isIgnored(filePath, options.ignore)) { return }
 
 		return this.watchDirectory(dirname(filePath), { ...options, recursive: false }, handler, filePath);
@@ -260,7 +260,7 @@ class Watchr extends EventEmitter implements Closable {
 	 * @param handler The handler to call when changes are detected
 	 * @returns A promise that resolves when all watchers are active
 	 */
-	private async watchPaths(targetPaths: Path[], options: WatchrOptions, handler: Handler = noop): Promise<void> {
+	private async watchPaths(targetPaths: Path[], options: WatchrOptions, handler: Handler = noop) {
 		if (this.isClosed() || this._abortSignal.aborted) { return }
 
 		if (targetPaths.length === 1) { return this.watchPath(targetPaths[0], options, handler) }
@@ -299,7 +299,7 @@ class Watchr extends EventEmitter implements Closable {
 	 * @param handler The handler to call when changes are detected
 	 * @returns A promise that resolves when the watcher is active
 	 */
-	private async watchPath(targetPath: Path, options: WatchrOptions, handler?: Handler): Promise<void> {
+	private async watchPath(targetPath: Path, options: WatchrOptions, handler?: Handler) {
 		if (this.isClosed()) { return }
 
 		targetPath = resolve(targetPath);
@@ -326,7 +326,7 @@ class Watchr extends EventEmitter implements Closable {
 	 * @param handler The handler to call when changes are detected
 	 * @returns A promise that resolves when all watchers are active
 	 */
-	private async watch(target: Path[], options: WatchrOptions, handler?: Handler): Promise<void> {
+	private async watch(target: Path[], options: WatchrOptions, handler?: Handler) {
 		if (this.isClosed()) { return }
 
 		for (const targetPath of target) { this.roots.add(targetPath) }
@@ -344,7 +344,7 @@ class Watchr extends EventEmitter implements Closable {
 	 * Closes a watcher for a specific config
 	 * @param config The config for the watcher
 	 */
-	private watcherClose(config: WatchrConfig): void {
+	private watcherClose(config: WatchrConfig) {
 		config.watcher.close();
 
 		const configs = this.watchers[config.folderPath];

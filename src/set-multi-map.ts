@@ -29,7 +29,7 @@ export class SetMultiMap<K, V> extends Map<K, Set<V>> {
 	 * @param value - The value to add to the SetMultiMap.
 	 * @returns The SetMultiMap with the updated key and value.
 	 */
-	override set(key: K, value: V | Set<V>): this {
+	override set(key: K, value: V | Set<V>) {
 		super.set(key, value instanceof Set ? value : (super.get(key) ?? new Set<V>()).add(value));
 
 		return this;
@@ -42,7 +42,7 @@ export class SetMultiMap<K, V> extends Map<K, Set<V>> {
 	 * @param iterator - The function to test each value.
 	 * @returns The first value that satisfies the provided testing function, or `undefined` if no such value is found.
 	 */
-	find(key: K, iterator: (value: V) => boolean): V | undefined {
+	find(key: K, iterator: (value: V) => boolean) {
 		const values = this.get(key);
 
 		if (values !== undefined) {
@@ -61,7 +61,7 @@ export class SetMultiMap<K, V> extends Map<K, Set<V>> {
 	 * @param value - The value to remove.
 	 * @returns True if the value was removed, false otherwise.
 	 */
-	deleteValue(key: K, value: V | undefined): boolean {
+	deleteValue(key: K, value: V | undefined) {
 		if (value === undefined) { return this.delete(key) }
 
 		const values = super.get(key);
@@ -81,7 +81,7 @@ export class SetMultiMap<K, V> extends Map<K, Set<V>> {
 	/**
 	 * @returns The string tag for the SetMultiMap.
 	 */
-	override get [Symbol.toStringTag](): string {
+	override get [Symbol.toStringTag]() {
 		return 'SetMultiMap';
 	}
 }

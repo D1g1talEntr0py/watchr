@@ -11,7 +11,7 @@ export function debounce(wait: number) {
 	return function<This extends object, Args extends unknown[], Return>(target: (this: This, ...args: Args) => Return,	_context: ClassMethodDecoratorContext<This, (this: This, ...args: Args) => Return>) {
 		const instances = new WeakMap<This, (...args: Args) => Promise<Return | undefined | void>>();
 
-		return function(this: This, ...args: Args): Promise<Return | undefined | void> {
+		return function(this: This, ...args: Args) {
 			let debounced = instances.get(this);
 
 			if (debounced === undefined) {

@@ -16,7 +16,7 @@ export class FileSystemStateManager {
 	 * Gets the paths being watched.
 	 * @returns A set multi-map of paths being watched.
 	 */
-	get paths(): SetMultiMap<InodeNumber, Path> {
+	get paths() {
 		return this._paths;
 	}
 
@@ -24,7 +24,7 @@ export class FileSystemStateManager {
 	 * Gets the stats for the paths being watched.
 	 * @returns A map of paths to their stats.
 	 */
-	get stats(): Map<Path, WatchrStats> {
+	get stats() {
 		return this._stats;
 	}
 
@@ -35,7 +35,7 @@ export class FileSystemStateManager {
 	 * @param type - The inode type to check.
 	 * @returns The inode number if it exists, otherwise undefined.
 	 */
-	getInodeNumber(targetPath: Path, event: FileSystemEvent, type?: InodeType): InodeNumber | undefined {
+	getInodeNumber(targetPath: Path, event: FileSystemEvent, type?: InodeType) {
 		const [ inodeNumber, inodeType ] = this.targetInodes[event]?.[targetPath] ?? [];
 
 		return type && inodeType !== type ? undefined : inodeNumber;
@@ -46,7 +46,7 @@ export class FileSystemStateManager {
 	 * @param targetPath - The path to update.
 	 * @returns A list of file system events that occurred.
 	 */
-	async update(targetPath: Path): Promise<FileSystemEvent[]> {
+	async update(targetPath: Path) {
 		const nextStats = await this.getStats(targetPath);
 		const events = this.determineEvents(this._stats.get(targetPath), nextStats);
 
@@ -62,7 +62,7 @@ export class FileSystemStateManager {
 	 * @param nextStats - The current stats for the path.
 	 * @returns An array of events with their associated stats.
 	 */
-	private determineEvents(previousStats?: WatchrStats, nextStats?: WatchrStats): Array<{type: FileSystemEvent, stats: WatchrStats}> {
+	private determineEvents(previousStats?: WatchrStats, nextStats?: WatchrStats) {
 		// Extract file type information once
 		const wasFile = previousStats?.isFile() ?? false;
 		const isFile = nextStats?.isFile() ?? false;
@@ -93,7 +93,7 @@ export class FileSystemStateManager {
 	 * @param targetPath - The path to update inodes for.
 	 * @param events - The events with their associated stats.
 	 */
-	private updateInodes(targetPath: Path, events: Array<{type: FileSystemEvent, stats: WatchrStats}>): void {
+	private updateInodes(targetPath: Path, events: Array<{type: FileSystemEvent, stats: WatchrStats}>) {
 		for (const event of events) {
 			this.updateInode(targetPath, event.type, event.stats);
 		}
@@ -102,7 +102,7 @@ export class FileSystemStateManager {
 	/**
 	 * Resets the file system poller state.
 	 */
-	reset(): void {
+	reset() {
 		this._paths.clear();
 		this._stats.clear();
 		// More efficient reset - recreate the object instead of iterating
@@ -114,7 +114,7 @@ export class FileSystemStateManager {
 	 * @param targetPath - The path to get the stats for.
 	 * @returns The stats for the path, or undefined if not found.
 	 */
-	private async getStats(targetPath: Path): Promise<WatchrStats | undefined> {
+	private async getStats(targetPath: Path) {
 		const stats = await FileSystem.getStats(targetPath);
 
 		if (!stats || !(stats.isFile() || stats.isDirectory())) { return }
@@ -128,7 +128,7 @@ export class FileSystemStateManager {
 	 * @param event - The file system event that occurred.
 	 * @param stats - The stats for the path.
 	 */
-	private updateInode(targetPath: Path, event: FileSystemEvent, stats: WatchrStats): void {
+	private updateInode(targetPath: Path, event: FileSystemEvent, stats: WatchrStats) {
 		const eventInodes = this.targetInodes[event] ??= {};
 		eventInodes[targetPath] = [ stats.inodeNumber, stats.isFile() ? InodeType.FILE : InodeType.DIR ];
 	}
@@ -138,7 +138,7 @@ export class FileSystemStateManager {
 	 * @param targetPath - The path to update.
 	 * @param stats - The new stats for the path.
 	 */
-	private updateStats(targetPath: Path, stats?: WatchrStats): void {
+	private updateStats(targetPath: Path, stats?: WatchrStats) {
 		if (stats) {
 			this._paths.set(stats.inodeNumber, targetPath);
 			this._stats.set(targetPath, stats);

@@ -25,7 +25,7 @@ export class FileRenameHandler {
 	/**
 	 * @returns The file system state manager.
 	 */
-	get fileStateManager(): FileSystemStateManager {
+	get fileStateManager() {
 		return this.fileSystemStateManager;
 	}
 
@@ -36,7 +36,7 @@ export class FileRenameHandler {
 	 * @param timeout - The timeout duration in milliseconds.
 	 * @returns void
 	 */
-	getLockTargetEvent(event: FileSystemEvent, targetPath: Path, timeout?: number): void {
+	getLockTargetEvent(event: FileSystemEvent, targetPath: Path, timeout?: number) {
 		switch (event) {
 			case FileSystemEvent.ADD: return this.processLock(targetPath, event, InodeType.FILE, 'add', timeout);
 			case FileSystemEvent.ADD_DIR: return this.processLock(targetPath, event, InodeType.DIR, 'add', timeout);
@@ -53,7 +53,7 @@ export class FileRenameHandler {
 	 * @param operation - Whether this is an 'add' or 'unlink' operation.
 	 * @param timeout - The timeout duration in milliseconds.
 	 */
-	private processLock(targetPath: Path, event: FileSystemEvent, inodeType: InodeType, operation: 'add' | 'unlink', timeout?: number): void {
+	private processLock(targetPath: Path, event: FileSystemEvent, inodeType: InodeType, operation: 'add' | 'unlink', timeout?: number) {
 		const inodeNumber = this.fileSystemStateManager.getInodeNumber(targetPath, event, inodeType);
 		const lockConfig = { inodeNumber, targetPath, lockEvent: inodeType === InodeType.FILE ? FileEvent : DirectoryEvent, fileSystemLocker: inodeType === InodeType.FILE ? this.fileLocks : this.directoryLocks };
 
@@ -67,7 +67,7 @@ export class FileRenameHandler {
 	/**
 	 * Resets the lock resolver.
 	 */
-	reset(): void {
+	reset() {
 		this.fileSystemStateManager.reset();
 		this.directoryLocks.reset();
 		this.fileLocks.reset();
@@ -79,9 +79,9 @@ export class FileRenameHandler {
 	 * @param timeout - The timeout duration in milliseconds.
 	 * @returns void
 	 */
-	private addLock({ inodeNumber, targetPath, lockEvent, fileSystemLocker }: LockConfig, timeout: number = renameTimeout): void {
+	private addLock({ inodeNumber, targetPath, lockEvent, fileSystemLocker }: LockConfig, timeout: number = renameTimeout) {
 		/** Emits the appropriate events based on the lock state. */
-		const emit = (): void => {
+		const emit = () => {
 			// Maybe this is actually a rename in a case-insensitive filesystem
 			const otherPath = this.fileSystemStateManager.paths.find(inodeNumber ?? -1, (path) => path !== targetPath);
 
@@ -95,13 +95,13 @@ export class FileRenameHandler {
 		if (!inodeNumber) { return emit() }
 
 		/** Cleans up the lock state. */
-		const cleanup = (): void => {
+		const cleanup = () => {
 			fileSystemLocker.removeLock(inodeNumber);
 			LockResolver.remove(free);
 		};
 
 		/** Frees the lock and emits the appropriate events. */
-		const free = (): void => {
+		const free = () => {
 			cleanup();
 			emit();
 		};
@@ -109,7 +109,7 @@ export class FileRenameHandler {
 		LockResolver.add(free, timeout);
 
 		/** Resolves the lock and emits the appropriate events. */
-		const resolve = (): void => {
+		const resolve = () => {
 			const unlink = fileSystemLocker.getUnlink(inodeNumber);
 
 			// No matching "unlink" lock found, skipping
@@ -138,17 +138,17 @@ export class FileRenameHandler {
 	 * @param timeout - The timeout duration in milliseconds.
 	 * @returns void
 	 */
-	private unlinkLock({ inodeNumber, targetPath, lockEvent, fileSystemLocker }: LockConfig, timeout: number = renameTimeout): void {
+	private unlinkLock({ inodeNumber, targetPath, lockEvent, fileSystemLocker }: LockConfig, timeout: number = renameTimeout) {
 		if (!inodeNumber) { return this.emitEvent(lockEvent.unlink, targetPath) }
 
 		/** Cleans up the lock state. */
-		const cleanup = (): void => {
+		const cleanup = () => {
 			fileSystemLocker.removeUnlink(inodeNumber);
 			LockResolver.remove(free);
 		};
 
 		/** Frees the lock and emits the appropriate events. */
-		const free = (): void => {
+		const free = () => {
 			cleanup();
 			this.emitEvent(lockEvent.unlink, targetPath);
 		};
@@ -159,7 +159,7 @@ export class FileRenameHandler {
 		 * Overrides the unlink lock.
 		 * @returns The overridden path.
 		 */
-		const overridden = (): Path => {
+		const overridden = () => {
 			cleanup();
 			return targetPath;
 		};

@@ -6,7 +6,7 @@ import { join } from 'path';
 
 const outdir = 'dist';
 
-async function exists(filePath: string): Promise<boolean> {
+async function exists(filePath: string) {
 	try {
 		await access(filePath, constants.F_OK);
 		return true;

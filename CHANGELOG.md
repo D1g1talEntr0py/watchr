@@ -1,3 +1,42 @@
+## [1.0.5](https://github.com/D1g1talEntr0py/watchr/compare/v1.0.4...v1.0.5) (2026-03-27)
+
+### Bug Fixes
+
+* Resolves compilation issues and improves typings (cb479a28ca7f45410b48a3cf76592cc3f230c2c3)
+Refines generic type bindings in the debounce decorator, eliminating the use of 'any' to enhance type safety.
+
+Ignores TypeScript build info files to prevent them from cluttering the repository.
+
+
+### Code Refactoring
+
+* remove explicit return types and rely on inference (c7002953b5d2fbb8ae7bb6694c32c7e14d137315)
+Simplifies the codebase by stripping out explicitly declared return types across source files, relying on TypeScript's type inference. This reduces visual noise and boilerplate without sacrificing type safety.
+
+
+### Documentation
+
+* update readme with ts version and package managers (a8c1459f66b08028260f52858e22b0f07a9dbcfb)
+Updates the TypeScript version badge to reflect support for >= 5.0.4, and adds installation instructions using Yarn as an alternative package manager.
+
+
+### Miscellaneous Chores
+
+* update vscode workspace settings (dcb3e0bcb472a325f22acf1764f526b7b35a29f0)
+Adds a new workspace setting to configure the TypeScript SDK path, ensuring the editor uses the local workspace version of TypeScript.
+
+
+### Build System
+
+* migrate to typescript 6 and update dependencies (feaae2ce56ce73dd2349b44c1e46df896d99e225)
+Upgrades TypeScript to version 6 and updates associated tooling such as ESLint and Vitest. Adapts `tsconfig.json` by removing outdated flags and replacing the Babel plugin in Vitest with a custom esbuild decorator transformer to accommodate the upgraded ecosystem.
+
+
+### Continuous Integration
+
+* update github actions versions (650fea455a646a9003e6c24bb64bb2ff6756a6a5)
+Updates the actions used in the publish workflow to their latest major versions (checkout to v6, pnpm/action-setup to v5, setup-node to v6) to ensure compatibility and maintain security.
+
 ## [1.0.4](https://github.com/D1g1talEntr0py/watchr/compare/v1.0.3...v1.0.4) (2026-03-18)
 
 ### Bug Fixes

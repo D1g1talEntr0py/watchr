@@ -1,21 +1,24 @@
+import { defineConfig, type Plugin } from 'vitest/config';
 import { fileURLToPath, URL } from 'node:url';
-import { defineConfig } from 'vitest/config';
-import babel from '@rolldown/plugin-babel';
+import { transform, type TransformResult } from 'esbuild';
 
-function decoratorPreset(options: Record<string, unknown>) {
+// Custom esbuild plugin to handle TypeScript decorators in Vitest since the default transformer (OXC) does not support them.
+function esbuildDecorators(): Plugin {
   return {
-    preset: () => ({
-      plugins: [[ '@babel/plugin-proposal-decorators', options ]],
-    }),
-    rolldown: {
-      // Only run this transform if the file contains a decorator.
-      filter: { code: '@' }
+    name: 'esbuild-decorators',
+    enforce: 'pre',
+    async transform(code, id): Promise<TransformResult | undefined> {
+      if (!id.endsWith('.ts') || !code.includes('@')) { return }
+
+      ({ code } = await transform(code, { loader: 'ts', target: 'es2024', sourcefile: id }));
+
+      return { code, map: '', warnings: [], mangleCache: {}, legalComments: 'none' };
     }
-  }
+  };
 }
 
 export default defineConfig({
-	plugins: [ babel({ presets: [ decoratorPreset({ version: '2023-11' }) ] }) ],
+	plugins: [ esbuildDecorators() ],
 	resolve: {
 		alias: [ { find: '@/', replacement: fileURLToPath(new URL('./', import.meta.url)) } ]
 	},

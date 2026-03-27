@@ -1,9 +1,7 @@
 {
 	"compilerOptions": {
-		"strict": true,
 		"declaration": true,
 		"isolatedModules": true,
-		"isolatedDeclarations": true,
 		"importHelpers": false,
 		"incremental": true,
 		"useUnknownInCatchVariables": true,
@@ -12,13 +10,11 @@
 		"allowUnreachableCode": false,
 		"noImplicitOverride": true,
 		"noImplicitReturns": true,
-		"target": "ESNext",
-		"module": "ESNext",
-		"moduleDetection": "force",
-		"moduleResolution": "Bundler",
 		"lib": [ "ESNext" ],
-		"outDir": "./dist",
-		"rootDir": "./src"
+		"moduleResolution": "Bundler",
+		"types": [ "node" ],
+		"rootDir": "./src",
+		"outDir": "./dist"
 	},
 	"include": [ "./src" ]
 }

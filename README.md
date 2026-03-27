@@ -6,7 +6,7 @@
 [![codecov](https://codecov.io/gh/D1g1talEntr0py/watchr/graph/badge.svg)](https://codecov.io/gh/D1g1talEntr0py/watchr)
 [![License: MIT](https://img.shields.io/github/license/D1g1talEntr0py/watchr)](https://github.com/D1g1talEntr0py/watchr/blob/main/LICENSE)
 [![Node.js](https://img.shields.io/node/v/@d1g1tal/watchr)](https://nodejs.org)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript->=5.0.4-blue?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 
 > **⚠️ Important Notice**: This is a personal fork of [`Watcher`](https://github.com/fabiospampinato/watcher) by [Fabio Spampinato](https://github.com/fabiospampinato), modified to fit specific personal needs and experimentation. **Most users should use the original [Watcher](https://github.com/fabiospampinato/watcher) library instead**, which is actively maintained, battle-tested, and feature-complete.
 
@@ -26,12 +26,15 @@ A modern, TypeScript-first file system watcher built on Node.js native APIs.
 
 ## Installation
 
-```sh
-// pnpm 🎉
+```bash
+# pnpm
 pnpm add @d1g1tal/watchr
 
-// npm 🤷🏽‍♂️
+# npm
 npm install @d1g1tal/watchr
+
+# yarn
+yarn add @d1g1tal/watchr
 ```
 
 ## Quick Start

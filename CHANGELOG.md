@@ -1,3 +1,22 @@
+## [1.0.6](https://github.com/D1g1talEntr0py/watchr/compare/v1.0.5...v1.0.6) (2026-04-07)
+
+### Bug Fixes
+
+* **deps:** bump vite to patch CVE-2026-39363 (b256b5c88eee8294d1f58a28f0537ad2bf8d91f1)
+Bumps vitest and corresponding packages to transitively update vite, addressing the security vulnerability described in CVE-2026-39363. Additionally, updates other local development dependencies to their latest versions.
+
+
+### Code Refactoring
+
+* enforce isolated declarations and explicit return types (0f1d722274762222299678fbdbc99f27e244cb91)
+Enables typescript's isolatedDeclarations compiler option and adds explicit return types across the codebase. Modifies the primary entry points in package.json and removes the intermediary index.ts file.
+
+
+### Miscellaneous Chores
+
+* update project configuration (8b73b1440aa99e963c9844f1fa80d72e80615f55)
+Adds a new editorconfig file to ensure consistent formatting across environments. Updates semantic release rules to properly trigger major version bumps on breaking changes.
+
 ## [1.0.5](https://github.com/D1g1talEntr0py/watchr/compare/v1.0.4...v1.0.5) (2026-03-27)
 
 ### Bug Fixes

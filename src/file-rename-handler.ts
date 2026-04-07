@@ -25,7 +25,7 @@ export class FileRenameHandler {
 	/**
 	 * @returns The file system state manager.
 	 */
-	get fileStateManager() {
+	get fileStateManager(): FileSystemStateManager {
 		return this.fileSystemStateManager;
 	}
 
@@ -36,7 +36,7 @@ export class FileRenameHandler {
 	 * @param timeout - The timeout duration in milliseconds.
 	 * @returns void
 	 */
-	getLockTargetEvent(event: FileSystemEvent, targetPath: Path, timeout?: number) {
+	getLockTargetEvent(event: FileSystemEvent, targetPath: Path, timeout?: number): void {
 		switch (event) {
 			case FileSystemEvent.ADD: return this.processLock(targetPath, event, InodeType.FILE, 'add', timeout);
 			case FileSystemEvent.ADD_DIR: return this.processLock(targetPath, event, InodeType.DIR, 'add', timeout);
@@ -67,7 +67,7 @@ export class FileRenameHandler {
 	/**
 	 * Resets the lock resolver.
 	 */
-	reset() {
+	reset(): void {
 		this.fileSystemStateManager.reset();
 		this.directoryLocks.reset();
 		this.fileLocks.reset();

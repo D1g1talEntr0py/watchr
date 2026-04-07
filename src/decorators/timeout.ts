@@ -9,7 +9,7 @@ export function timeout(delay: number = 250) {
 	if (delay < 0) { throw new Error('🚨 timeout value must be non-negative.') }
 
 	return function<This extends object, Args extends unknown[], Return>(target: (this: This, ...args: Args) => Promise<Return>, _context: ClassMethodDecoratorContext<This, (this: This, ...args: Args) => Promise<Return>>) {
-		return async function(this: This, ...args: Args) {
+		return async function(this: This, ...args: Args): Promise<Return | undefined> {
 			let timeoutId: NodeJS.Timeout | undefined;
 
 			try {

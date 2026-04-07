@@ -42,7 +42,7 @@ export class FileSystemEventManager {
 	 * @param watcherConfig The watcher configuration
 	 * @returns A Promise of a FileSystemEventManager
 	 */
-	static async newInstance(fileSystemPoller: FileSystemStateManager, watchr: Watchr, watcherConfig: WatchrConfig) {
+	static async newInstance(fileSystemPoller: FileSystemStateManager, watchr: Watchr, watcherConfig: WatchrConfig): Promise<FileSystemEventManager> {
 		return new FileSystemEventManager(fileSystemPoller, watchr, watcherConfig).initializeEvents();
 	}
 

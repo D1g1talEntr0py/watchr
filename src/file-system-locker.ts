@@ -15,7 +15,7 @@ export class FileSystemLocker {
 	 * @param inodeNumber - The inode number to lock.
 	 * @param callback - The callback to execute when the lock is released.
 	 */
-	addLock(inodeNumber: InodeNumber, callback: Callable) {
+	addLock(inodeNumber: InodeNumber, callback: Callable): void {
 		this.add.set(inodeNumber, callback);
 	}
 
@@ -24,7 +24,7 @@ export class FileSystemLocker {
 	 * @param inodeNumber - The inode number to lock.
 	 * @param producer - The producer to execute when the lock is released.
 	 */
-	addUnlink(inodeNumber: InodeNumber, producer: Producer<Path>) {
+	addUnlink(inodeNumber: InodeNumber, producer: Producer<Path>): void {
 		this.unlink.set(inodeNumber, producer);
 	}
 
@@ -32,7 +32,7 @@ export class FileSystemLocker {
 	 * Removes a lock for the add event from the file system locker.
 	 * @param inodeNumber - The inode number to remove the lock from.
 	 */
-	removeLock(inodeNumber: InodeNumber) {
+	removeLock(inodeNumber: InodeNumber): void {
 		this.add.delete(inodeNumber);
 	}
 
@@ -40,7 +40,7 @@ export class FileSystemLocker {
 	 * Removes a lock for the unlink event from the file system locker.
 	 * @param inodeNumber - The inode number to remove the lock from.
 	 */
-	removeUnlink(inodeNumber: InodeNumber) {
+	removeUnlink(inodeNumber: InodeNumber): void {
 		this.unlink.delete(inodeNumber);
 	}
 
@@ -49,7 +49,7 @@ export class FileSystemLocker {
 	 * @param inodeNumber - The inode number to retrieve the lock for.
 	 * @returns The callback for the lock or undefined if not found.
 	 */
-	getLock(inodeNumber: InodeNumber) {
+	getLock(inodeNumber: InodeNumber): Callable | undefined {
 		return this.add.get(inodeNumber);
 	}
 
@@ -63,7 +63,7 @@ export class FileSystemLocker {
 	}
 
 	/** Resets the file system locker. */
-	reset() {
+	reset(): void {
 		this.add.clear();
 		this.unlink.clear();
 	}

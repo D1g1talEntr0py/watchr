@@ -12,7 +12,7 @@ export function debounce(wait: number) {
 		type DebouncedFn = (...args: Args) => Promise<Return | undefined | void>;
 		const instances = new WeakMap<This, DebouncedFn>();
 
-		return function(this: This, ...args: Args) {
+		return function(this: This, ...args: Args): Return | Promise<Return | undefined | void> {
 			let debounced = instances.get(this);
 
 			if (debounced === undefined) {

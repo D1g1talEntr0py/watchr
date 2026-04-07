@@ -34,7 +34,7 @@ export class WatchrStats {
 	 *
 	 * @returns The inode number of the file or directory.
 	 */
-	get inodeNumber() {
+	get inodeNumber(): InodeNumber {
 		return this._inodeNumber;
 	}
 
@@ -43,7 +43,7 @@ export class WatchrStats {
 	 *
 	 * @returns The size of the file or directory.
 	 */
-	get size() {
+	get size(): number {
 		return this._size;
 	}
 
@@ -52,7 +52,7 @@ export class WatchrStats {
 	 *
 	 * @returns True if the stats object represents a file. Otherwise, false.
 	 */
-	isFile() {
+	isFile(): boolean {
 		return this._isFile;
 	}
 
@@ -61,7 +61,7 @@ export class WatchrStats {
 	 *
 	 * @returns True if the stats object represents a directory. Otherwise, false.
 	 */
-	isDirectory() {
+	isDirectory(): boolean {
 		return this._isDirectory;
 	}
 
@@ -70,7 +70,7 @@ export class WatchrStats {
 	 *
 	 * @returns True if the stats object represents a symbolic link. Otherwise, false.
 	 */
-	isSymbolicLink() {
+	isSymbolicLink(): boolean {
 		return this._isSymbolicLink;
 	}
 }

@@ -18,7 +18,7 @@ export class LockResolver {
 	 * @param fn - The resolver function to add.
 	 * @param timeout - The timeout duration in milliseconds.
 	 */
-	static add(fn: Resolver, timeout: number) {
+	static add(fn: Resolver, timeout: number): void {
 		LockResolver.resolvers.set(fn, Date.now() + timeout);
 
 		LockResolver.init();
@@ -28,7 +28,7 @@ export class LockResolver {
 	 * Removes a resolver function.
 	 * @param fn - The resolver function to remove.
 	 */
-	static remove(fn: Resolver) {
+	static remove(fn: Resolver): void {
 		LockResolver.resolvers.delete(fn);
 	}
 

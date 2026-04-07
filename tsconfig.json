@@ -1,15 +1,15 @@
 {
 	"compilerOptions": {
 		"declaration": true,
+		"isolatedDeclarations": true,
 		"isolatedModules": true,
-		"importHelpers": false,
 		"incremental": true,
-		"useUnknownInCatchVariables": true,
 		"forceConsistentCasingInFileNames": true,
 		"allowUnusedLabels": false,
 		"allowUnreachableCode": false,
 		"noImplicitOverride": true,
 		"noImplicitReturns": true,
+		"stableTypeOrdering": true,
 		"lib": [ "ESNext" ],
 		"moduleResolution": "Bundler",
 		"types": [ "node" ],

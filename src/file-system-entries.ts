@@ -17,7 +17,7 @@ export class FileSystemEntries {
 	 * @param directory - The directory to add.
 	 * @returns The file system entries.
 	 */
-	addDirectory(directory: string) {
+	addDirectory(directory: string): this {
 		this._directories.push(directory);
 
 		return this;
@@ -28,7 +28,7 @@ export class FileSystemEntries {
 	 * @param file - The file to add.
 	 * @returns The file system entries.
 	 */
-	addFile(file: string) {
+	addFile(file: string): this {
 		this._files.push(file);
 
 		return this;
@@ -38,7 +38,7 @@ export class FileSystemEntries {
 	 * Gets the directories in the file system.
 	 * @returns The directories in the file system.
 	 */
-	get directories() {
+	get directories(): string[] {
 		return this._directories;
 	}
 
@@ -46,7 +46,7 @@ export class FileSystemEntries {
 	 * Gets the files in the file system.
 	 * @returns The files in the file system.
 	 */
-	get files() {
+	get files(): string[] {
 		return this._files;
 	}
 
@@ -54,7 +54,7 @@ export class FileSystemEntries {
 	 * Resets the file system entries.
 	 * @returns The file system entries.
 	 */
-	reset() {
+	reset(): this {
 		this._directories.length = 0;
 		this._files.length = 0;
 

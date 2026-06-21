@@ -177,6 +177,22 @@ describe('FileSystemPoller', () => {
       fileSystemEventManager['updateInode']('/file.txt', FileSystemEvent.ADD, mockStats);
       expect(fileSystemEventManager?.['targetInodes']?.[FileSystemEvent.ADD]?.['/file.txt']).toEqual([123, InodeType.FILE]);
     });
+
+		it('should prune the oldest tracked inode event when capacity is exceeded', () => {
+			const originalMaxTrackedEventInodes = (FileSystemStateManager as any).maxTrackedEventInodes;
+			(FileSystemStateManager as any).maxTrackedEventInodes = 1;
+
+			const firstStats = new WatchrStats({ isFile: () => true, isDirectory: () => false, isSymbolicLink: () => false, ino: 101n, size: 100n } as any as Stats);
+			const secondStats = new WatchrStats({ isFile: () => true, isDirectory: () => false, isSymbolicLink: () => false, ino: 202n, size: 100n } as any as Stats);
+
+			fileSystemEventManager['updateInode']('/first.txt', FileSystemEvent.ADD, firstStats);
+			fileSystemEventManager['updateInode']('/second.txt', FileSystemEvent.ADD, secondStats);
+
+			expect(fileSystemEventManager.getInodeNumber('/first.txt', FileSystemEvent.ADD)).toBeUndefined();
+			expect(fileSystemEventManager.getInodeNumber('/second.txt', FileSystemEvent.ADD)).toBe(202);
+
+			(FileSystemStateManager as any).maxTrackedEventInodes = originalMaxTrackedEventInodes;
+		});
   });
 
   describe('updateStats', () => {

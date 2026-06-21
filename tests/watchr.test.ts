@@ -296,6 +296,18 @@ describe('Watchr', () => {
 			// Should not be watching files if properly closed during setup
 			expect(fileHandler).not.toHaveBeenCalled();
 		});
+
+		it('should not register the same all-event handler more than once', async () => {
+			const watchr = new Watchr();
+			const handler = vi.fn();
+
+			await (watchr as any).watch([testDir], {}, handler);
+			await (watchr as any).watch([testDir], {}, handler);
+
+			expect(watchr.listeners(WatcherEvent.ALL).filter((listener) => listener === handler)).toHaveLength(1);
+
+			watchr.close();
+		});
 	});
 
 	describe('watchFile', () => {

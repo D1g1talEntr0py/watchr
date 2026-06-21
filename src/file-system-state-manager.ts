@@ -8,7 +8,9 @@ type EventInodeRecord = Partial<Record<FileSystemEvent, Record<Path, [InodeNumbe
 
 /** Polls the file system for changes */
 export class FileSystemStateManager {
+	private static readonly maxTrackedEventInodes: number = 50000;
 	private readonly targetInodes: EventInodeRecord = {};
+	private readonly targetInodeOrder = new Map<string, { event: FileSystemEvent, targetPath: Path }>();
 	private readonly _paths = new SetMultiMap<InodeNumber, Path>();
 	private readonly _stats = new Map<Path, WatchrStats>();
 
@@ -105,8 +107,17 @@ export class FileSystemStateManager {
 	reset(): void {
 		this._paths.clear();
 		this._stats.clear();
-		// More efficient reset - recreate the object instead of iterating
-		Object.assign(this, { targetInodes: {} });
+		for (const [ event, eventInodes ] of Object.entries(this.targetInodes) as Array<[FileSystemEvent, Record<Path, [InodeNumber, InodeType]>]>) {
+			if (!eventInodes) { continue }
+
+			for (const targetPath of Object.keys(eventInodes)) {
+				delete eventInodes[targetPath];
+			}
+
+			delete this.targetInodes[event];
+		}
+
+		this.targetInodeOrder.clear();
 	}
 
 	/**
@@ -131,6 +142,39 @@ export class FileSystemStateManager {
 	private updateInode(targetPath: Path, event: FileSystemEvent, stats: WatchrStats) {
 		const eventInodes = this.targetInodes[event] ??= {};
 		eventInodes[targetPath] = [ stats.inodeNumber, stats.isFile() ? InodeType.FILE : InodeType.DIR ];
+
+		const inodeEventKey = `${event}:${targetPath}`;
+		if (this.targetInodeOrder.has(inodeEventKey)) {
+			this.targetInodeOrder.delete(inodeEventKey);
+		}
+
+		this.targetInodeOrder.set(inodeEventKey, { event, targetPath });
+		this.pruneTrackedInodes();
+	}
+
+	/**
+	 * Prunes tracked inode events to keep memory bounded in long-running processes.
+	 */
+	private pruneTrackedInodes() {
+		while (this.targetInodeOrder.size > FileSystemStateManager.maxTrackedEventInodes) {
+			const oldestKey = this.targetInodeOrder.keys().next().value;
+
+			if (!oldestKey) { break }
+
+			const oldestEntry = this.targetInodeOrder.get(oldestKey);
+			this.targetInodeOrder.delete(oldestKey);
+
+			if (!oldestEntry) { continue }
+
+			const eventInodes = this.targetInodes[oldestEntry.event];
+			if (!eventInodes) { continue }
+
+			delete eventInodes[oldestEntry.targetPath];
+
+			if (!Object.keys(eventInodes).length) {
+				delete this.targetInodes[oldestEntry.event];
+			}
+		}
 	}
 
 	/**

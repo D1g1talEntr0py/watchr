@@ -339,7 +339,9 @@ class Watchr extends EventEmitter implements Closable {
 
 		if (this.isClosed()) { return }
 
-		if (handler !== undefined) { this.on(WatcherEvent.ALL, handler) }
+		if (handler !== undefined && !this.listeners(WatcherEvent.ALL).includes(handler)) {
+			this.on(WatcherEvent.ALL, handler);
+		}
 
 		this.setReady();
 	}

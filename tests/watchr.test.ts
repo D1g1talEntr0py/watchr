@@ -179,7 +179,8 @@ describe('Watchr', () => {
 			const error = await Promise.race([errorPromise, timeoutPromise]);
 
 			expect(error).toBeInstanceOf(Error);
-			expect(error.message).toContain('is not supported');
+			expect(error.message).toContain('Target path type is not supported');
+			expect(error.message).not.toContain(unsupportedPath);
 
 			getStatsSpy.mockRestore();
 			watchr.close();
@@ -393,6 +394,29 @@ describe('Watchr', () => {
 			// Should not generate events for ignored paths
 			const ignoredEvents = events.filter(e => e.path === ignoredPath);
 			expect(ignoredEvents.length).toBe(0);
+
+			watchr.close();
+		});
+
+		it('should emit a safe error when ignore callback throws', async () => {
+			const options = {
+				ignore: () => {
+					throw new Error('ignore exploded');
+				},
+			};
+			const watchr = new Watchr([], options);
+			const targetPath = join(testDir, 'callback-throw.txt');
+			createTestFile('callback-throw.txt');
+
+			const errorPromise = new Promise<Error>((resolve) => {
+				watchr.once(WatcherEvent.ERROR, resolve);
+			});
+
+			await (watchr as any).watchPath(targetPath, options);
+			const error = await errorPromise;
+
+			expect(error).toBeInstanceOf(Error);
+			expect(error.message).toBe('🚨 ignore callback failed.');
 
 			watchr.close();
 		});

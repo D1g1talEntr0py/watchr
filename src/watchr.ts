@@ -101,7 +101,14 @@ class Watchr extends EventEmitter implements Closable {
 	 * @returns True if the target path is ignored, false otherwise
 	 */
 	isIgnored(targetPath: Path, ignore?: Ignore): boolean {
-		return ignore?.(targetPath) ?? false;
+		if (!ignore) { return false }
+
+		try {
+			return ignore(targetPath);
+		} catch {
+			this.error(new Error('🚨 ignore callback failed.'));
+			return true;
+		}
 	}
 
 	/**
@@ -319,7 +326,7 @@ class Watchr extends EventEmitter implements Closable {
 		} else if (stats.isDirectory()) {
 			return this.watchDirectory(targetPath, options, handler);
 		} else {
-			this.error(`"${targetPath}" is not supported`);
+			this.error('🚨 Target path type is not supported');
 		}
 	}
 

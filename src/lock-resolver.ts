@@ -28,6 +28,7 @@ export class LockResolver {
 			if (oldestResolver !== undefined) {
 				const oldestEntry = LockResolver.resolvers.get(oldestResolver);
 				LockResolver.resolvers.delete(oldestResolver);
+				console.warn('🚨 Lock resolver capacity exceeded. Evicting oldest pending resolver.');
 
 				oldestEntry?.onEvict?.();
 			}

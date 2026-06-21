@@ -65,6 +65,23 @@ describe('LockResolver', () => {
 
       (LockResolver as any).maxResolvers = originalMaxResolvers;
     });
+
+    it('should warn when a resolver is evicted due to capacity', () => {
+      const originalMaxResolvers = (LockResolver as any).maxResolvers;
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      (LockResolver as any).maxResolvers = 1;
+
+      const fn1 = vi.fn();
+      const fn2 = vi.fn();
+
+      LockResolver.add(fn1, 1000);
+      LockResolver.add(fn2, 1000);
+
+      expect(warnSpy).toHaveBeenCalledWith('🚨 Lock resolver capacity exceeded. Evicting oldest pending resolver.');
+
+      (LockResolver as any).maxResolvers = originalMaxResolvers;
+      warnSpy.mockRestore();
+    });
   });
 
   describe('remove', () => {

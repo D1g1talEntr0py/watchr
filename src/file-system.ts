@@ -44,6 +44,7 @@ export class FileSystem {
 			if (signal?.aborted) { return }
 
 			const subPathPrefix = `${rootPath}${rootPath === sep ? '' : sep}`;
+			const subdirectoriesToProcess: string[] = [];
 
 			for (const directoryEntry of await readdir(rootPath, { withFileTypes: true })) {
 				const subPath = `${subPathPrefix}${directoryEntry.name}`;
@@ -54,10 +55,15 @@ export class FileSystem {
 
 				if (directoryEntry.isDirectory()) {
 					fileSystemEntries.addDirectory(subPath);
-					await populateResultFromPath(subPath);
+					subdirectoriesToProcess.push(subPath);
 				} else if (directoryEntry.isFile()) {
 					fileSystemEntries.addFile(subPath);
 				}
+			}
+
+			// Parallelize sibling directory processing for better latency
+			if (subdirectoriesToProcess.length > 0) {
+				await Promise.all(subdirectoriesToProcess.map((subPath) => populateResultFromPath(subPath)));
 			}
 		};
 

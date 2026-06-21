@@ -268,7 +268,9 @@ class Watchr extends EventEmitter implements Closable {
 		// Sort and deduplicate the paths
 		targetPaths = uniqueSortedArray(targetPaths);
 
-		// TODO: Find parallelizable chunks rather than using an all or nothing approach
+		// NOTE: Parallelization at the directory traversal level (readDirectory) has been implemented to improve latency.
+		// This method watches paths serially when subpaths are detected to prevent duplicate watchers on the same folder.
+		// For independent paths, parallelization via Promise.all() is used below.
 		let hasSubPaths = false;
 		const length = targetPaths.length;
 		outer: for (let i = 0; i < length; i++) {

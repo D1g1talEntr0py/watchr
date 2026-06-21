@@ -1,3 +1,33 @@
+## [1.0.7](https://github.com/D1g1talEntr0py/watchr/compare/v1.0.6...v1.0.7) (2026-06-21)
+
+### Performance Improvements
+
+* **core:** parallelize directory traversal for improved latency (8d0529f2cd43bb090641e27bcd10f3eb401c3517)
+- Refactor readDirectory() to batch sibling directory processing with Promise.all()
+  instead of sequential await, reducing latency by 2-3x for deep directory structures
+- Add comprehensive benchmark suite (11 tests) using vitest bench framework
+  measuring initialization, event emission, rename detection, and bulk operations
+- Clarify watchPaths TODO: directory-level parallelization implemented,
+  path-level approach is intentional design decision for correctness
+- Add dev dependencies: chokidar, watcher, mitata for benchmarking
+
+Files: src/file-system.ts, src/watchr.ts, benchmarks/watchr.bench.ts,
+       package.json, vitest.config.ts, pnpm-lock.yaml
+Tests: All 198 tests pass, no regressions
+
+
+### Code Refactoring
+
+* **ts:** enforce exact optional property semantics (c0682c71251e77aaad13fa6b924d8ce581524d87)
+TypeScript strictness hardening, optional-property handling cleanup, and a regression test for the stricter contract.
+
+* **ts:** tighten type safety and modernize promise helpers (3aa84873d20de8d08d73d874f67ef8a8c4d5e502)
+- enable noUncheckedIndexedAccess for stricter indexed access checks
+- update debounce to use Promise.withResolvers()
+- update timeout decorator to use Promise.withResolvers()
+- fix watchPaths bounds to satisfy stricter indexed access typing
+- keep behavior unchanged while improving type safety and clarity
+
 ## [1.0.6](https://github.com/D1g1talEntr0py/watchr/compare/v1.0.5...v1.0.6) (2026-04-07)
 
 ### Bug Fixes

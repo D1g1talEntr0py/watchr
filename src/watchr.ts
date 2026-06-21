@@ -25,6 +25,7 @@ class Watchr extends EventEmitter implements Closable {
 	private readonly _renameHandler: FileRenameHandler;
 	private readonly roots: Set<Path>;
 	private readonly watchers: Record<Path, WatchrConfig[]>;
+	private readonly allEventHandlers = new WeakSet<Handler>();
 	static readonly FileEvent: typeof FileEvent = FileEvent;
 	static readonly DirectoryEvent: typeof DirectoryEvent = DirectoryEvent;
 	static readonly Event: typeof WatcherEvent = WatcherEvent;
@@ -349,8 +350,15 @@ class Watchr extends EventEmitter implements Closable {
 
 		if (this.isClosed()) { return }
 
-		if (handler !== undefined && !this.listeners(WatcherEvent.ALL).includes(handler)) {
-			this.on(WatcherEvent.ALL, handler);
+		if (handler !== undefined && !this.allEventHandlers.has(handler)) {
+			this.allEventHandlers.add(handler);
+			this.on(WatcherEvent.ALL, (...args: Parameters<Handler>) => {
+				try {
+					handler(...args);
+				} catch (error: unknown) {
+					this.error(error);
+				}
+			});
 		}
 
 		this.setReady();

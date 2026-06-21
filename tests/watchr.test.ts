@@ -305,10 +305,31 @@ describe('Watchr', () => {
 			await (watchr as any).watch([testDir], {}, handler);
 			await (watchr as any).watch([testDir], {}, handler);
 
-			expect(watchr.listeners(WatcherEvent.ALL).filter((listener) => listener === handler)).toHaveLength(1);
+				expect(watchr.listenerCount(WatcherEvent.ALL)).toBe(1);
 
 			watchr.close();
 		});
+
+			it('should emit an error when a user event handler throws', async () => {
+				const throwingHandler = vi.fn(() => {
+					throw new Error('handler exploded');
+				});
+
+				const watchr = new Watchr(testDir, { ignoreInitial: true }, throwingHandler);
+				await watchr.readyLock;
+
+				const errorPromise = new Promise<Error>((resolve) => {
+					watchr.once(WatcherEvent.ERROR, resolve);
+				});
+
+				createTestFile('handler-throws.txt');
+
+				const error = await errorPromise;
+				expect(error.message).toBe('handler exploded');
+				expect(throwingHandler).toHaveBeenCalled();
+
+				watchr.close();
+			});
 	});
 
 	describe('watchFile', () => {

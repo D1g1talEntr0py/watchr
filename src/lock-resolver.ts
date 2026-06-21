@@ -34,7 +34,10 @@ export class LockResolver {
 			}
 		}
 
-		LockResolver.resolvers.set(fn, { timestamp: Date.now() + timeout, onEvict });
+		LockResolver.resolvers.set(fn, {
+			timestamp: Date.now() + timeout,
+			...(onEvict === undefined ? {} : { onEvict }),
+		});
 
 		LockResolver.init();
 	}
@@ -64,7 +67,7 @@ export class LockResolver {
 
 		clearInterval(LockResolver.intervalId);
 
-		LockResolver.intervalId = undefined;
+		delete LockResolver.intervalId;
 	}
 
 	/**

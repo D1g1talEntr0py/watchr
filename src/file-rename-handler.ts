@@ -58,7 +58,12 @@ export class FileRenameHandler {
 	 */
 	private processLock(targetPath: Path, event: FileSystemEvent, inodeType: InodeType, operation: 'add' | 'unlink', timeout?: number) {
 		const inodeNumber = this.fileSystemStateManager.getInodeNumber(targetPath, event, inodeType);
-		const lockConfig = { inodeNumber, targetPath, lockEvent: inodeType === InodeType.FILE ? FileEvent : DirectoryEvent, fileSystemLocker: inodeType === InodeType.FILE ? this.fileLocks : this.directoryLocks };
+		const lockConfig = {
+			targetPath,
+			lockEvent: inodeType === InodeType.FILE ? FileEvent : DirectoryEvent,
+			fileSystemLocker: inodeType === InodeType.FILE ? this.fileLocks : this.directoryLocks,
+			...(inodeNumber === undefined ? {} : { inodeNumber }),
+		};
 
 		if (operation === 'add') {
 			this.addLock(lockConfig, timeout);

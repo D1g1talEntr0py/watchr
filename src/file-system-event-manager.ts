@@ -69,7 +69,10 @@ export class FileSystemEventManager {
 			await this.onWatcherEvent(NodeTargetEvent.CHANGE, this.filePath, isInitial);
 		} else {
 			// Multiple initial paths
-			const { directories, files } = await FileSystem.readDirectory(this.folderPath, { ignore: this.options.ignore, signal: this.watchr.abortSignal });
+			const { directories, files } = await FileSystem.readDirectory(this.folderPath, {
+				signal: this.watchr.abortSignal,
+				...(this.options.ignore === undefined ? {} : { ignore: this.options.ignore }),
+			});
 
 			await Promise.all([ this.folderPath, ...directories, ...files ].map(async (targetPath) => {
 				// Already polled

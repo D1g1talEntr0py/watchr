@@ -238,7 +238,13 @@ class Watchr extends EventEmitter implements Closable {
 
 		// Node.js 20.16+ supports recursive watching natively on all platforms
 		return this.synchronizeWatchers(async () => {
-			await this.addWatcher({ watcher: watch(folderPath, options), handler, options, folderPath, filePath });
+			await this.addWatcher({
+				watcher: watch(folderPath, options),
+				options,
+				folderPath,
+				...(handler === undefined ? {} : { handler }),
+				...(filePath === undefined ? {} : { filePath }),
+			});
 		});
 	}
 

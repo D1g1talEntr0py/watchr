@@ -4,7 +4,7 @@ import { fileDescriptorLimit } from './constants';
 /** A class that manages a retry queue for handling tasks that need to be retried */
 export class RetryQueue {
 	/** The interval ID for the retry queue processing. */
-	private intervalId?: NodeJS.Timeout = undefined;
+	private intervalId: NodeJS.Timeout | undefined;
 	/** The set of active resolvers currently being processed. */
 	private readonly activeQueue: Set<Resolver> = new Set();
 	/** The set of pending resolvers waiting to be processed. */

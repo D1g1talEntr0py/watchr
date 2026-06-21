@@ -329,7 +329,11 @@ class Watchr extends EventEmitter implements Closable {
 
 		const stats = await FileSystem.getStats(targetPath);
 
-		if (!stats) { throw new Error('🚨 Path not found') }
+		if (!stats) {
+			if (this.isClosed() || this._abortSignal.aborted) { return }
+
+			throw new Error('🚨 Path not found');
+		}
 
 		if (stats.isFile()) {
 			return this.watchFile(targetPath, options, handler);

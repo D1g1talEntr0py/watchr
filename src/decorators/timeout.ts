@@ -13,9 +13,8 @@ export function timeout(delay: number = 250) {
 			let timeoutId: NodeJS.Timeout | undefined;
 
 			try {
-				const timeoutPromise = new Promise<undefined>((resolve) => {
-					timeoutId = setTimeout(() => resolve(undefined), delay);
-				});
+				const { promise: timeoutPromise, resolve: resolveTimeout } = Promise.withResolvers<undefined>();
+				timeoutId = setTimeout(() => resolveTimeout(undefined), delay);
 
 				const methodPromise = target.apply(this, args);
 				const result = await Promise.race([ methodPromise, timeoutPromise ]);

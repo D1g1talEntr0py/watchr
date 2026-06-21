@@ -23,28 +23,30 @@ export const debounce = <T extends TypedFunction<T>>(func: T, wait: number) => {
 	let pendingResolve: ((value: OptionalReturn<T>) => void) | undefined;
 
 	return function(this: ThisParameterType<T>, ...args: Parameters<T>): Promise<OptionalReturn<T>> {
-		return new Promise((resolve, reject) => {
-			// Clear previous timer
-			if (timeoutId) { clearTimeout(timeoutId) }
+		const { promise, resolve, reject } = Promise.withResolvers<OptionalReturn<T>>();
 
-			// Cancel previous promise immediately
-			if (pendingResolve) { pendingResolve(undefined) }
+		// Clear previous timer
+		if (timeoutId) { clearTimeout(timeoutId) }
 
-			pendingResolve = resolve;
+		// Cancel previous promise immediately
+		if (pendingResolve) { pendingResolve(undefined) }
 
-			timeoutId = setTimeout(() => {
-				try {
-					resolve(func.apply(this, args));
-				} catch (error) {
-					// Use the provided castError to standardize the rejection
-					reject(castError(error));
-				} finally {
-					// Cleanup to prevent memory leaks
-					pendingResolve = undefined;
-					timeoutId = undefined;
-				}
-			}, wait);
-		});
+		pendingResolve = resolve;
+
+		timeoutId = setTimeout(() => {
+			try {
+				resolve(func.apply(this, args));
+			} catch (error) {
+				// Use the provided castError to standardize the rejection
+				reject(castError(error));
+			} finally {
+				// Cleanup to prevent memory leaks
+				pendingResolve = undefined;
+				timeoutId = undefined;
+			}
+		}, wait);
+
+		return promise;
 	};
 };
 

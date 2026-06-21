@@ -7,6 +7,7 @@
 		"forceConsistentCasingInFileNames": true,
 		"allowUnusedLabels": false,
 		"allowUnreachableCode": false,
+		"noUncheckedIndexedAccess": true,
 		"noImplicitOverride": true,
 		"noImplicitReturns": true,
 		"stableTypeOrdering": true,

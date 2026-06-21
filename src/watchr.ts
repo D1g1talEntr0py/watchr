@@ -276,7 +276,7 @@ class Watchr extends EventEmitter implements Closable {
 	private async watchPaths(targetPaths: Path[], options: WatchrOptions, handler: Handler = noop) {
 		if (this.isClosed() || this._abortSignal.aborted) { return }
 
-		if (targetPaths.length === 1) { return this.watchPath(targetPaths[0], options, handler) }
+		if (targetPaths.length === 1) { return this.watchPath(targetPaths[0]!, options, handler) }
 
 		// Sort and deduplicate the paths
 		targetPaths = uniqueSortedArray(targetPaths);
@@ -288,7 +288,7 @@ class Watchr extends EventEmitter implements Closable {
 		const length = targetPaths.length;
 		outer: for (let i = 0; i < length; i++) {
 			for (let j = i + 1; j < length; j++) {
-				if (FileSystem.isSubPath(targetPaths[i], targetPaths[j])) {
+				if (FileSystem.isSubPath(targetPaths[i]!, targetPaths[j]!)) {
 					hasSubPaths = true;
 					break outer;
 				}
@@ -299,7 +299,7 @@ class Watchr extends EventEmitter implements Closable {
 			// Watching serially
 			for (let i = 0; i < length; i++) {
 				if (this._abortSignal.aborted) { return }
-				await this.watchPath(targetPaths[i], options, handler);
+				await this.watchPath(targetPaths[i]!, options, handler);
 			}
 		} else {
 			// All paths are about separate subtrees, so we can start watching in parallel safely

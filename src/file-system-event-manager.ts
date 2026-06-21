@@ -232,7 +232,20 @@ export class FileSystemEventManager {
 			// We'll just emit a change event and let the poller handle it.
 			this.onWatcherChange(NodeTargetEvent.CHANGE);
 		} else {
-			this.watchr.error(error);
+			this.watchr.error(this.sanitizeWatcherError(error));
 		}
+	}
+
+	/**
+	 * Sanitizes watcher errors to avoid leaking absolute file system paths.
+	 * @param error The original watcher error
+	 * @returns A sanitized error with a stable message and error code
+	 */
+	private sanitizeWatcherError(error: NodeJS.ErrnoException): Error {
+		const message = error.code ? `🚨 Watcher error (${error.code})` : '🚨 Watcher error';
+		const sanitizedError = new Error(message) as NodeJS.ErrnoException;
+		sanitizedError.code = error.code;
+
+		return sanitizedError;
 	}
 }

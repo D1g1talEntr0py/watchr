@@ -5,7 +5,7 @@ import { FileSystem } from './file-system';
 import { castError, noop, uniqueSortedArray } from './utils';
 import { FileRenameHandler } from './file-rename-handler';
 import { WatchrStats } from './watchr-stats';
-import { FileEvent, DirectoryEvent, WatcherEvent } from './constants';
+import { FileEvent, DirectoryEvent, WatcherEvent, debounceWait, renameTimeout } from './constants';
 import { FileSystemEventManager } from './file-system-event-manager';
 import type { Handler, Ignore, Path, WatchrOptions, WatchrConfig, AsyncCallable, Closable, FileSystemEvent } from './@types';
 
@@ -36,6 +36,8 @@ class Watchr extends EventEmitter implements Closable {
 	 */
 	constructor(target: Path[] | Path = [], options: WatchrOptions = {}, handler?: Handler) {
 		super();
+		Watchr.validateWatchArguments(options, handler);
+		options = Watchr.normalizeWatchOptions(options);
 		this.closed = false;
 		this.ready = false;
 		this.abortController = new AbortController();
@@ -310,7 +312,7 @@ class Watchr extends EventEmitter implements Closable {
 
 		const stats = await FileSystem.getStats(targetPath);
 
-		if (!stats) { throw new Error(`🚨 Path not found: "${targetPath}"`) }
+		if (!stats) { throw new Error('🚨 Path not found') }
 
 		if (stats.isFile()) {
 			return this.watchFile(targetPath, options, handler);
@@ -367,6 +369,42 @@ class Watchr extends EventEmitter implements Closable {
 				this.watchersRestoreTimeout = setTimeout(() => this.watchersRestore());
 			}
 		}
+	}
+
+	/**
+	 * Validates runtime watch arguments to prevent unsafe configuration.
+	 * @param options The watcher options
+	 * @param handler Optional event handler
+	 */
+	private static validateWatchArguments(options: WatchrOptions, handler?: Handler): void {
+		if (handler !== undefined && typeof handler !== 'function') {
+			throw new Error('🚨 handler must be a function.');
+		}
+
+		if (options.ignore !== undefined && typeof options.ignore !== 'function') {
+			throw new Error('🚨 ignore must be a function.');
+		}
+
+		if (options.debounce !== undefined && (!Number.isFinite(options.debounce) || options.debounce < 0)) {
+			throw new Error('🚨 debounce must be a non-negative finite number.');
+		}
+
+		if (options.renameTimeout !== undefined && (!Number.isFinite(options.renameTimeout) || options.renameTimeout < 0)) {
+			throw new Error('🚨 renameTimeout must be a non-negative finite number.');
+		}
+	}
+
+	/**
+	 * Applies safe defaults for watch options.
+	 * @param options The incoming watch options
+	 * @returns Normalized watch options
+	 */
+	private static normalizeWatchOptions(options: WatchrOptions): WatchrOptions {
+		return {
+			...options,
+			debounce: options.debounce ?? debounceWait,
+			renameTimeout: options.renameTimeout ?? renameTimeout
+		};
 	}
 }
 

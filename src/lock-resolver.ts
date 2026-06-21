@@ -7,6 +7,7 @@ import type { Resolver } from './@types';
 export class LockResolver {
 	private static intervalId?: NodeJS.Timeout;
 	private static readonly interval: number = 50;
+	private static readonly maxResolvers: number = 50000;
 	private static readonly resolvers: Map<Resolver, number> = new Map();
 
 	private constructor() {
@@ -19,6 +20,15 @@ export class LockResolver {
 	 * @param timeout - The timeout duration in milliseconds.
 	 */
 	static add(fn: Resolver, timeout: number): void {
+		if (!LockResolver.resolvers.has(fn) && LockResolver.resolvers.size >= LockResolver.maxResolvers) {
+			// Keep memory bounded under heavy event pressure by evicting the oldest pending resolver.
+			const oldestResolver = LockResolver.resolvers.keys().next().value;
+
+			if (oldestResolver !== undefined) {
+				LockResolver.resolvers.delete(oldestResolver);
+			}
+		}
+
 		LockResolver.resolvers.set(fn, Date.now() + timeout);
 
 		LockResolver.init();

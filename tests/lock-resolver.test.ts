@@ -30,6 +30,23 @@ describe('LockResolver', () => {
       expect(LockResolver['resolvers'].has(fn)).toBe(true);
       expect(LockResolver['intervalId']).toBeDefined();
     });
+
+    it('should evict the oldest resolver when max capacity is reached', () => {
+      const originalMaxResolvers = (LockResolver as any).maxResolvers;
+      (LockResolver as any).maxResolvers = 1;
+
+      const fn1 = vi.fn();
+      const fn2 = vi.fn();
+
+      LockResolver.add(fn1, 1000);
+      LockResolver.add(fn2, 1000);
+
+      expect(LockResolver['resolvers'].size).toBe(1);
+      expect(LockResolver['resolvers'].has(fn1)).toBe(false);
+      expect(LockResolver['resolvers'].has(fn2)).toBe(true);
+
+      (LockResolver as any).maxResolvers = originalMaxResolvers;
+    });
   });
 
   describe('remove', () => {

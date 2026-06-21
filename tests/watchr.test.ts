@@ -74,6 +74,18 @@ describe('Watchr', () => {
 			watchr.close();
 		});
 
+			it('should throw for invalid debounce option', () => {
+				expect(() => new Watchr(testDir, { debounce: -1 })).toThrow('debounce must be a non-negative finite number');
+			});
+
+			it('should throw for invalid renameTimeout option', () => {
+				expect(() => new Watchr(testDir, { renameTimeout: -1 })).toThrow('renameTimeout must be a non-negative finite number');
+			});
+
+			it('should throw for invalid ignore option', () => {
+				expect(() => new Watchr(testDir, { ignore: true as unknown as WatchrOptions['ignore'] })).toThrow('ignore must be a function');
+			});
+
 		it('should start watching paths provided in the constructor', async () => {
 			createTestFile('test.txt');
 			const handler = vi.fn();
@@ -137,6 +149,7 @@ describe('Watchr', () => {
 			});
 			expect(error).toBeInstanceOf(Error);
 			expect(error.message).to.include('Path not found');
+				expect(error.message).not.toContain(nonExistentPath);
 			watchr.close();
 		});
 

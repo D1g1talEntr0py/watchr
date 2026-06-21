@@ -176,7 +176,12 @@ describe('FileSystemEventManager', () => {
 
 			(fileSystemEventManager as any).handleWatchrError(error);
 
-			expect(errorSpy).toHaveBeenCalledWith(error);
+			expect(errorSpy).toHaveBeenCalledTimes(1);
+			const [ emittedError ] = errorSpy.mock.calls[0] as [NodeJS.ErrnoException];
+			expect(emittedError).toBeInstanceOf(Error);
+			expect(emittedError.message).toBe('🚨 Watcher error (ENOENT)');
+			expect(emittedError.code).toBe('ENOENT');
+			expect(emittedError.message).not.toContain('Test error');
 		});
 
 		it('should handle EPERM error on Windows by triggering a change event', async () => {

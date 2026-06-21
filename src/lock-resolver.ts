@@ -8,7 +8,7 @@ export class LockResolver {
 	private static intervalId?: NodeJS.Timeout;
 	private static readonly interval: number = 50;
 	private static readonly maxResolvers: number = 50000;
-	private static readonly resolvers: Map<Resolver, number> = new Map();
+	private static readonly resolvers: Map<Resolver, { timestamp: number, onEvict?: () => void }> = new Map();
 
 	private constructor() {
 		throw new Error('This class cannot be instantiated');
@@ -18,18 +18,22 @@ export class LockResolver {
 	 * Adds a resolver function to be called after a timeout.
 	 * @param fn - The resolver function to add.
 	 * @param timeout - The timeout duration in milliseconds.
+	 * @param onEvict - Optional callback invoked if the resolver is evicted before it resolves.
 	 */
-	static add(fn: Resolver, timeout: number): void {
+	static add(fn: Resolver, timeout: number, onEvict?: () => void): void {
 		if (!LockResolver.resolvers.has(fn) && LockResolver.resolvers.size >= LockResolver.maxResolvers) {
 			// Keep memory bounded under heavy event pressure by evicting the oldest pending resolver.
 			const oldestResolver = LockResolver.resolvers.keys().next().value;
 
 			if (oldestResolver !== undefined) {
+				const oldestEntry = LockResolver.resolvers.get(oldestResolver);
 				LockResolver.resolvers.delete(oldestResolver);
+
+				oldestEntry?.onEvict?.();
 			}
 		}
 
-		LockResolver.resolvers.set(fn, Date.now() + timeout);
+		LockResolver.resolvers.set(fn, { timestamp: Date.now() + timeout, onEvict });
 
 		LockResolver.init();
 	}
@@ -68,7 +72,7 @@ export class LockResolver {
 	private static resolve() {
 		const now = Date.now();
 
-		for (const [ fn, timestamp ] of LockResolver.resolvers) {
+		for (const [ fn, { timestamp } ] of LockResolver.resolvers) {
 			// Continue waiting...
 			if (timestamp > now) { continue }
 

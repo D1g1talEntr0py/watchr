@@ -47,6 +47,24 @@ describe('LockResolver', () => {
 
       (LockResolver as any).maxResolvers = originalMaxResolvers;
     });
+
+    it('should call the evicted resolver callback when capacity is exceeded', () => {
+      const originalMaxResolvers = (LockResolver as any).maxResolvers;
+      (LockResolver as any).maxResolvers = 1;
+
+      const fn1 = vi.fn();
+      const fn2 = vi.fn();
+      const onEvict = vi.fn();
+
+      LockResolver.add(fn1, 1000, onEvict);
+      LockResolver.add(fn2, 1000);
+
+      expect(onEvict).toHaveBeenCalledTimes(1);
+      expect(LockResolver['resolvers'].has(fn1)).toBe(false);
+      expect(LockResolver['resolvers'].has(fn2)).toBe(true);
+
+      (LockResolver as any).maxResolvers = originalMaxResolvers;
+    });
   });
 
   describe('remove', () => {

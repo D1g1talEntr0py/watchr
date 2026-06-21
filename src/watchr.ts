@@ -44,7 +44,7 @@ class Watchr extends EventEmitter implements Closable {
 		this._abortSignal = this.abortController.signal;
 		this._readyLock = new Promise((resolve) => this.on(WatcherEvent.READY, resolve));
 		this.roots = new Set();
-		this._renameHandler = new FileRenameHandler(this.emitEvent.bind(this));
+		this._renameHandler = new FileRenameHandler(this.emitEvent.bind(this), this.error.bind(this));
 		this.watchers = {};
 		this._watchersLock = Promise.resolve();
 		this.watchersRestorable = {};

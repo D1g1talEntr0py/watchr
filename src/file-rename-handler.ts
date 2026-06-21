@@ -7,6 +7,7 @@ import type { Path, LockConfig, TargetEventEmitter } from './@types';
 /** Handles file rename events */
 export class FileRenameHandler {
 	private readonly emitEvent: TargetEventEmitter;
+	private readonly emitError: (error: unknown) => boolean;
 	private readonly fileLocks: FileSystemLocker;
 	private readonly directoryLocks: FileSystemLocker;
 	private readonly fileSystemStateManager: FileSystemStateManager;
@@ -14,9 +15,11 @@ export class FileRenameHandler {
 	/**
 	 * Creates an instance of FileRenameHandler.
 	 * @param emitEvent - The event emitter to use for emitting events.
+	 * @param emitError - The error emitter to use for reporting internal failures.
 	 */
-	constructor(emitEvent: TargetEventEmitter) {
+	constructor(emitEvent: TargetEventEmitter, emitError: (error: unknown) => boolean = () => false) {
 		this.emitEvent = emitEvent;
+		this.emitError = emitError;
 		this.fileLocks = new FileSystemLocker();
 		this.directoryLocks = new FileSystemLocker();
 		this.fileSystemStateManager = new FileSystemStateManager();
@@ -106,7 +109,7 @@ export class FileRenameHandler {
 			emit();
 		};
 
-		LockResolver.add(free, timeout);
+		LockResolver.add(free, timeout, () => this.emitError(new Error('🚨 Lock resolver capacity exceeded.')));
 
 		/** Resolves the lock and emits the appropriate events. */
 		const resolve = () => {
@@ -153,7 +156,7 @@ export class FileRenameHandler {
 			this.emitEvent(lockEvent.unlink, targetPath);
 		};
 
-		LockResolver.add(free, timeout);
+		LockResolver.add(free, timeout, () => this.emitError(new Error('🚨 Lock resolver capacity exceeded.')));
 
 		/**
 		 * Overrides the unlink lock.

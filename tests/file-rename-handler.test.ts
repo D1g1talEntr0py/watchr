@@ -2,17 +2,20 @@ import { FileRenameHandler } from '../src/file-rename-handler';
 import { FileSystemEvent, InodeType } from '../src/constants';
 import { FileSystemLocker } from '../src/file-system-locker';
 import { FileSystemStateManager } from '../src/file-system-state-manager';
+import { LockResolver } from '../src/lock-resolver';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Path, TargetEventEmitter } from '../src/@types';
 
 describe('FileRenameHandler', () => {
   let fileRenameHandler: FileRenameHandler;
   let emitEvent: TargetEventEmitter;
+  let emitError: ReturnType<typeof vi.fn>;
   let fileSystemPoller: FileSystemStateManager;
 
   beforeEach(() => {
     emitEvent = vi.fn();
-    fileRenameHandler = new FileRenameHandler(emitEvent);
+    emitError = vi.fn();
+    fileRenameHandler = new FileRenameHandler(emitEvent, emitError);
     fileSystemPoller = fileRenameHandler.fileStateManager;
   });
 
@@ -163,6 +166,22 @@ describe('FileRenameHandler', () => {
       expect(pollerSpy).toHaveBeenCalled();
       expect(fileRenameHandler['directoryLocks']).toBeInstanceOf(FileSystemLocker);
       expect(fileRenameHandler['fileLocks']).toBeInstanceOf(FileSystemLocker);
+    });
+  });
+
+  describe('lock overflow handling', () => {
+    it('should emit a safe error when lock resolver capacity is exceeded', () => {
+      const originalMaxResolvers = (LockResolver as any).maxResolvers;
+      (LockResolver as any).maxResolvers = 1;
+
+      vi.spyOn(fileSystemPoller, 'getInodeNumber').mockReturnValue(123);
+
+      fileRenameHandler.getLockTargetEvent(FileSystemEvent.UNLINK, '/old-file');
+      fileRenameHandler.getLockTargetEvent(FileSystemEvent.UNLINK, '/new-file');
+
+      expect(emitError).toHaveBeenCalledWith(expect.objectContaining({ message: '🚨 Lock resolver capacity exceeded.' }));
+
+      (LockResolver as any).maxResolvers = originalMaxResolvers;
     });
   });
 });

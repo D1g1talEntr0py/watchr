@@ -20,6 +20,7 @@ const isNodeError = (error: unknown): error is NodeError => error instanceof Err
  */
 export class FileSystem {
 	private static readonly retryQueue = new RetryQueue();
+	private static readonly maxStatRetries = 10;
 
 	private constructor () {
 		throw new Error('This class cannot be instantiated');
@@ -84,6 +85,7 @@ export class FileSystem {
 	@timeout()
 	static async getStats(targetPath: string): Promise<Stats | undefined> {
 		const clearQueue = await FileSystem.retryQueue.schedule<Stats>();
+		let retries = 0;
 
 		/**
 		 * Handles the rejection of a promise.
@@ -94,6 +96,10 @@ export class FileSystem {
 			clearQueue();
 
 			if (!isNodeError(error) || !retryErrorCodes.has(error.code)) { return }
+
+			if (retries >= FileSystem.maxStatRetries) { return }
+
+			retries++;
 
 			await setAsyncTimeout(~~(Math.random() * 100));
 

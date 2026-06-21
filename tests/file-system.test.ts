@@ -122,7 +122,7 @@ describe('FileSystem', () => {
         // Restore the original file name after a short delay
         setTimeout(() => {
 					vol.renameSync(tempRenamedFilePath, emptyFile);
-        }, 100); // Adjust the delay as needed
+		}, 0);
 
         const result = await pollPromise;
 
@@ -131,6 +131,18 @@ describe('FileSystem', () => {
         expect(typeof result?.isFile).toBe('function');
         expect(result?.isFile()).toBe(true);
     });
+
+		it('should stop retrying after max retry attempts for retryable errors', async () => {
+			const retryableError = Object.assign(new Error('too many open files'), { code: 'EMFILE' as const });
+			const statSpy = vi.spyOn(vol.promises, 'stat').mockRejectedValue(retryableError);
+
+			const result = await FileSystem.getStats('any-path');
+
+			expect(result).toBeUndefined();
+			expect(statSpy).toHaveBeenCalled();
+			expect(statSpy.mock.calls.length).toBeLessThanOrEqual(11);
+			expect(statSpy.mock.calls.length).toBeGreaterThan(1);
+		});
 
 		it('should return undefined for non-existent file', async () => {
 			const result = await FileSystem.getStats('./tests/mocked/non-existent.txt');

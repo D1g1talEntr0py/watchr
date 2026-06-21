@@ -206,6 +206,20 @@ describe('FileSystemEventManager', () => {
 		});
 	});
 
+	describe('cleanup()', () => {
+		it('should remove watcher listeners when cleanup is called', () => {
+			const watcher = (fileSystemEventManager as any).watcher;
+
+			expect(watcher.listenerCount('change')).toBeGreaterThan(0);
+			expect(watcher.listenerCount('error')).toBeGreaterThan(0);
+
+			(fileSystemEventManager as any).cleanup();
+
+			expect(watcher.listenerCount('change')).toBe(0);
+			expect(watcher.listenerCount('error')).toBe(0);
+		});
+	});
+
 	describe('populateEvents()', () => {
 		it('should populate add events for new files', async () => {
 			const filePath = resolve(tmpDir, 'new-file.txt');

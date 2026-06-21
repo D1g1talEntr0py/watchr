@@ -2,6 +2,7 @@
 import type { BigIntStats, FSWatcher } from 'node:fs';
 import type { WatchrStats } from '../watchr-stats';
 import type { FileSystemLocker } from '../file-system-locker';
+import type { FileSystemEventManager } from '../file-system-event-manager';
 import type { NodeTargetEvent, FileSystemEvent, DirectoryEvent, FileEvent } from '../constants';
 
 interface Closable { close: Callable };
@@ -60,6 +61,7 @@ type WatchrConfig = {
 	filePath?: Path;
   handler?: Handler;
 	nodeHandler?: NodeEventHandler;
+	eventManager?: FileSystemEventManager;
 };
 
 type WatchrOptions = {

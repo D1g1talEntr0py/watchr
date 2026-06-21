@@ -19,6 +19,8 @@ export class FileSystemEventManager {
 	private readonly initials: Event[];
 	private readonly regulars: Set<Path>;
 	private readonly nodeEventHandler: NodeEventHandler;
+	private readonly watcherChangeHandler: (event?: NodeTargetEvent, targetName?: string) => void;
+	private readonly watcherErrorHandler: (error: NodeJS.ErrnoException) => void;
 
 	/**
 	 * Creates a new instance of FileSystemEventManager
@@ -32,6 +34,8 @@ export class FileSystemEventManager {
 		this.watchr = watchr;
 		this.initials = [];
 		this.regulars = new Set();
+		this.watcherChangeHandler = this.onWatcherChange.bind(this);
+		this.watcherErrorHandler = this.handleWatchrError.bind(this);
 		({ watcher: this.watcher, options: this.options, folderPath: this.folderPath, filePath: this.filePath, nodeHandler: this.nodeEventHandler = this.generateNodeEventHandler() } = watcherConfig);
 	}
 
@@ -51,8 +55,8 @@ export class FileSystemEventManager {
 	 * @returns A Promise that resolves to a FileSystemEventManager
 	 */
 	private async initializeEvents() {
-		this.watcher.on(NodeWatcherEvent.CHANGE, this.onWatcherChange.bind(this));
-		this.watcher.on(NodeWatcherEvent.ERROR, this.handleWatchrError.bind(this));
+		this.watcher.on(NodeWatcherEvent.CHANGE, this.watcherChangeHandler);
+		this.watcher.on(NodeWatcherEvent.ERROR, this.watcherErrorHandler);
 
 		// "isInitial" => is ignorable via the "ignoreInitial" option
 		const isInitial = !this.watchr.isReady();
@@ -78,6 +82,14 @@ export class FileSystemEventManager {
 		}
 
 		return this;
+	}
+
+	/**
+	 * Removes watcher listeners so closed watchers do not retain stale handlers.
+	 */
+	cleanup(): void {
+		this.watcher.removeListener(NodeWatcherEvent.CHANGE, this.watcherChangeHandler);
+		this.watcher.removeListener(NodeWatcherEvent.ERROR, this.watcherErrorHandler);
 	}
 
 	/**

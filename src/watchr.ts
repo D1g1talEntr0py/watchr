@@ -218,7 +218,10 @@ class Watchr extends EventEmitter implements Closable {
 	private async addWatcher(config: WatchrConfig) {
 		this.addWatcherConfig(config);
 
-		return FileSystemEventManager.newInstance(this._renameHandler.fileStateManager, this, config);
+		const eventManager = await FileSystemEventManager.newInstance(this._renameHandler.fileStateManager, this, config);
+		config.eventManager = eventManager;
+
+		return eventManager;
 	}
 
 	/**
@@ -358,6 +361,7 @@ class Watchr extends EventEmitter implements Closable {
 	 * @param config The config for the watcher
 	 */
 	private watcherClose(config: WatchrConfig) {
+		config.eventManager?.cleanup();
 		config.watcher.close();
 
 		const configs = this.watchers[config.folderPath];

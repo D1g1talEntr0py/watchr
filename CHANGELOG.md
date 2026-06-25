@@ -1,3 +1,13 @@
+## [1.1.1](https://github.com/D1g1talEntr0py/watchr/compare/v1.1.0...v1.1.1) (2026-06-25)
+
+### Bug Fixes
+
+* removed race condition during shutdown (61b831ba94843b5ebb24e8ed69a6d9d0e90fcd01)
+
+### Miscellaneous Chores
+
+* **ci:** fix failing test in GitHub actions and remove old eslint.config.js (731085d3158c541f0021ef93375fa2d68a1c8dac)
+
 ## [1.1.0](https://github.com/D1g1talEntr0py/watchr/compare/v1.0.7...v1.1.0) (2026-06-25)
 
 ### Features

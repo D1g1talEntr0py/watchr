@@ -1,8 +1,10 @@
+/// <reference types="node" />
+
 import * as esbuild from 'esbuild';
 import ts from 'typescript';
+import { join } from 'node:path';
 import { addJsExtensionPlugin } from './build/extension-plugin.ts';
-import { access, constants, readdir, rm } from 'fs/promises';
-import { join } from 'path';
+import { access, constants, readdir, rm } from 'node:fs/promises';
 
 const outdir = 'dist';
 

@@ -1,0 +1,16 @@
+{
+	"extends": "./tsconfig.json",
+	"compilerOptions": {
+		"noEmit": true,
+		"isolatedDeclarations": false,
+		"allowImportingTsExtensions": true,
+		"rootDir": "."
+	},
+	"include": [
+		"./esbuild.config.ts",
+		"./vitest.config.ts",
+		"./eslint.config.ts",
+		"./build/**/*.ts",
+		"./benchmarks/**/*.ts"
+	]
+}

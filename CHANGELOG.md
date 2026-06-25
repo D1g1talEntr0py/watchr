@@ -9,7 +9,7 @@
   measuring initialization, event emission, rename detection, and bulk operations
 - Clarify watchPaths TODO: directory-level parallelization implemented,
   path-level approach is intentional design decision for correctness
-- Add dev dependencies: chokidar, watcher, mitata for benchmarking
+- Benchmark suite uses existing Vitest tooling; no extra benchmark-specific dependencies
 
 Files: src/file-system.ts, src/watchr.ts, benchmarks/watchr.bench.ts,
        package.json, vitest.config.ts, pnpm-lock.yaml

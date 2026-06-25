@@ -259,7 +259,7 @@ export class FileSystemEventManager {
 	private sanitizeWatcherError(error: NodeJS.ErrnoException): Error {
 		const message = error.code ? `🚨 Watcher error (${error.code})` : '🚨 Watcher error';
 		const sanitizedError = new Error(message) as NodeJS.ErrnoException;
-		sanitizedError.code = error.code;
+		sanitizedError.code = error.code ?? 'UNKNOWN';
 
 		return sanitizedError;
 	}

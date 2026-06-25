@@ -16,7 +16,7 @@ export function debounce(wait: number) {
 			let debounced = instances.get(this);
 
 			if (debounced === undefined) {
-				debounced = _debounce(target.bind(this) as (...args: Args) => Return, wait) as DebouncedFn;
+				debounced = _debounce(target.bind(this) as (...args: Args) => Return, wait);
 				instances.set(this, debounced);
 			}
 

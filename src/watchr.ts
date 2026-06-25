@@ -241,6 +241,8 @@ class Watchr extends EventEmitter implements Closable {
 
 		// Node.js 20.16+ supports recursive watching natively on all platforms
 		return this.synchronizeWatchers(async () => {
+			if (this.isClosed() || this._abortSignal.aborted) { return }
+
 			await this.addWatcher({
 				watcher: watch(folderPath, options),
 				options,
@@ -331,6 +333,8 @@ class Watchr extends EventEmitter implements Closable {
 		if (this.isIgnored(targetPath, options.ignore)) { return }
 
 		const stats = await FileSystem.getStats(targetPath);
+
+		if (this.isClosed() || this._abortSignal.aborted) { return }
 
 		if (!stats) {
 			// Double-check if closed after async operation to avoid race condition during cleanup

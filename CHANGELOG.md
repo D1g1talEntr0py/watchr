@@ -1,3 +1,26 @@
+## [1.1.0](https://github.com/D1g1talEntr0py/watchr/compare/v1.0.7...v1.1.0) (2026-06-25)
+
+### Features
+
+* **stats:** add change timestamps and equality comparator to WatchrStats (1e6308f5bd00a4009e655339e76ba99ec24f4610)
+
+### Bug Fixes
+
+* **watchr:** handle missing error codes and clean up decorator types (8f26da3ea47bdd173b05f9a5da9cb68fd0121d35)
+
+### Performance Improvements
+
+* **bench:** rewrite benchmark suite to use native fs.watch and vitest (06f94365c0c21d0ebe9e5d7032715fac06b991e7)
+
+### Miscellaneous Chores
+
+* **deps:** upgrade dependencies and prune benchmark packages (d8d3b430f179cb00a632a858c4bd2b264841ec3f)
+* **tooling:** set up tsconfig tooling and migrate eslint config to typescript (f97e2111be0c7be4e224367f1c6a505cba534cfa)
+
+### Continuous Integration
+
+* **compat:** added check for closed or aborted before throwing an error (3261c0bdce8c7fecdc9dda123166d7bb776572e0)
+
 ## [1.0.7](https://github.com/D1g1talEntr0py/watchr/compare/v1.0.6...v1.0.7) (2026-06-21)
 
 ### Performance Improvements

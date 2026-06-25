@@ -139,6 +139,9 @@ class Watchr extends EventEmitter implements Closable {
 
 		this.closed = true;
 
+		// Abort pending operations before emitting close event to avoid race conditions
+		this.abortController.abort();
+
 		this.emit(WatcherEvent.CLOSE);
 	}
 
@@ -330,7 +333,9 @@ class Watchr extends EventEmitter implements Closable {
 		const stats = await FileSystem.getStats(targetPath);
 
 		if (!stats) {
-			if (this.isClosed() || this._abortSignal.aborted) { return }
+			// Double-check if closed after async operation to avoid race condition during cleanup
+			// The abort signal might not be set yet due to event listener timing, so also check this.closed directly
+			if (this.closed || this._abortSignal.aborted) { return }
 
 			throw new Error('🚨 Path not found');
 		}

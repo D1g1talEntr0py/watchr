@@ -6,6 +6,7 @@ describe('WatchrStats', () => {
 	const mockStats: Stats = {
 		ino: 123456n,
 		size: 1024n,
+		mtimeMs: 1n,
 		isFile: () => true,
 		isDirectory: () => false,
 		isSymbolicLink: () => false,
@@ -26,7 +27,7 @@ describe('WatchrStats', () => {
 		blksize: 0n,
 		blocks: 0n,
 		atimeMs: 0n,
-		mtimeMs: 0n,
+		mtimeMs: 1n,
 		ctimeMs: 0n,
 		birthtimeMs: 0n,
 		atime: new Date(),
@@ -66,6 +67,27 @@ describe('WatchrStats', () => {
 		it('should return the correct size', () => {
 			const watchrStats = new WatchrStats(mockStats);
 			expect(watchrStats.size).toBe(1024);
+		});
+	});
+
+	describe('modifiedTimeMs', () => {
+		it('should return the correct modified time', () => {
+			const watchrStats = new WatchrStats(mockStats);
+			expect(watchrStats.modifiedTimeMs).toBe(1);
+		});
+	});
+
+	describe('modifiedTimeNs', () => {
+		it('should return the correct modified time in nanoseconds', () => {
+			const watchrStats = new WatchrStats(mockStats);
+			expect(watchrStats.modifiedTimeNs).toBe(0n);
+		});
+	});
+
+	describe('changeTimeNs', () => {
+		it('should return the correct status change time in nanoseconds', () => {
+			const watchrStats = new WatchrStats(mockStats);
+			expect(watchrStats.changeTimeNs).toBe(0n);
 		});
 	});
 
@@ -113,6 +135,29 @@ describe('WatchrStats', () => {
 		it('should return false if the stats do not represent a symbolic link', () => {
 			const watchrStats = new WatchrStats(mockStats);
 			expect(watchrStats.isSymbolicLink()).toBe(false);
+		});
+	});
+
+	describe('equals', () => {
+		it('should return true for identical snapshots', () => {
+			const left = new WatchrStats(mockStats);
+			const right = new WatchrStats({ ...mockStats });
+
+			expect(left.equals(right)).toBe(true);
+		});
+
+		it('should return false when modified time differs', () => {
+			const left = new WatchrStats(mockStats);
+			const right = new WatchrStats({ ...mockStats, mtimeNs: 2n });
+
+			expect(left.equals(right)).toBe(false);
+		});
+
+		it('should return false when status change time differs', () => {
+			const left = new WatchrStats(mockStats);
+			const right = new WatchrStats({ ...mockStats, ctimeNs: 2n });
+
+			expect(left.equals(right)).toBe(false);
 		});
 	});
 });

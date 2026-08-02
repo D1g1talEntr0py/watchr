@@ -1,8 +1,8 @@
 /** Default debounce wait time in milliseconds */
-const debounceWait = 100;
+const debounceWait = 75;
 
 /** Default rename timeout in milliseconds */
-const renameTimeout = 250;
+const renameTimeout = 150;
 
 /** Default file descriptor limit */
 const fileDescriptorLimit = 2048;

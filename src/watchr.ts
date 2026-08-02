@@ -1,13 +1,17 @@
 import EventEmitter from 'node:events';
-import { resolve, dirname } from 'node:path';
+import { resolve, dirname, basename, matchesGlob } from 'node:path';
 import { watch } from 'node:fs';
+import type { BigIntStats, WatchOptions } from 'node:fs';
 import { FileSystem } from './file-system';
 import { castError, noop, uniqueSortedArray } from './utils';
 import { FileRenameHandler } from './file-rename-handler';
 import { WatchrStats } from './watchr-stats';
 import { FileEvent, DirectoryEvent, WatcherEvent, debounceWait, renameTimeout } from './constants';
 import { FileSystemEventManager } from './file-system-event-manager';
-import type { Handler, Ignore, Path, WatchrOptions, WatchrConfig, AsyncCallable, Closable, FileSystemEvent } from './@types';
+import type { Handler, WatchIgnore, Path, WatchrOptions, WatchrConfig, AsyncCallable, Closable, FileSystemEvent } from './@types';
+
+type NativeIgnoreEntry = string | RegExp | ((filename: string) => boolean);
+type NativeIgnoreMatcher = NativeIgnoreEntry | ReadonlyArray<NativeIgnoreEntry>;
 
 /**
  * Watches files and directories for changes.
@@ -98,11 +102,13 @@ class Watchr extends EventEmitter implements Closable {
 	/**
 	 * Checks if the target path is ignored
 	 * @param targetPath The target path to check
-	 * @param ignore The ignore function to use
+	 * @param ignore The ignore matcher to use
 	 * @returns True if the target path is ignored, false otherwise
 	 */
-	isIgnored(targetPath: Path, ignore?: Ignore): boolean {
-		if (!ignore) { return false }
+	isIgnored(targetPath: Path, ignore?: WatchIgnore): boolean {
+		if (ignore === undefined) { return false }
+
+		if (typeof ignore !== 'function') { return Watchr.matchesNativeIgnore(targetPath, ignore) }
 
 		try {
 			return ignore(targetPath);
@@ -110,6 +116,54 @@ class Watchr extends EventEmitter implements Closable {
 			this.error(new Error('🚨 ignore callback failed.'));
 			return true;
 		}
+	}
+
+	/**
+	 * Matches a target path against a native ignore matcher.
+	 * @param targetPath The target path to test.
+	 * @param nativeIgnore A native ignore pattern.
+	 * @returns True when the matcher applies to the target path.
+	 */
+	private static matchesNativeIgnore(targetPath: Path, nativeIgnore: NativeIgnoreMatcher | NativeIgnoreEntry): boolean {
+		if (Watchr.isNativeIgnoreArray(nativeIgnore)) {
+			for (const ignoreEntry of nativeIgnore) {
+				if (Watchr.matchesNativeIgnore(targetPath, ignoreEntry)) { return true }
+			}
+
+			return false;
+		}
+
+		if (typeof nativeIgnore === 'function') {
+			const basenamePath = basename(targetPath);
+
+			return nativeIgnore(targetPath) || nativeIgnore(basenamePath);
+		}
+
+		if (typeof nativeIgnore === 'string') {
+			if (targetPath === nativeIgnore || basename(targetPath) === nativeIgnore) { return true }
+			const trimmedTargetPath = targetPath.replace(/^\/+/, '');
+
+			return matchesGlob(targetPath, nativeIgnore) || matchesGlob(trimmedTargetPath, nativeIgnore) || matchesGlob(basename(targetPath), nativeIgnore);
+		}
+
+		if (!(nativeIgnore instanceof RegExp)) { return false }
+
+		nativeIgnore.lastIndex = 0;
+
+		if (nativeIgnore.test(targetPath)) { return true }
+
+		nativeIgnore.lastIndex = 0;
+
+		return nativeIgnore.test(basename(targetPath));
+	}
+
+	/**
+	 * Type guard for native ignore arrays.
+	 * @param nativeIgnore Ignore matcher candidate.
+	 * @returns True when nativeIgnore is an array of native ignore entries.
+	 */
+	private static isNativeIgnoreArray(nativeIgnore: NativeIgnoreMatcher | NativeIgnoreEntry): nativeIgnore is ReadonlyArray<NativeIgnoreEntry> {
+		return Array.isArray(nativeIgnore);
 	}
 
 	/**
@@ -412,6 +466,33 @@ class Watchr extends EventEmitter implements Closable {
 	}
 
 	/**
+	 * Maps Watchr options to native watcher options.
+	 * @param options User-provided watch options.
+	 * @returns Native watch options.
+	 */
+	private toNodeWatchOptions(options: WatchrOptions): WatchOptions {
+		const ignore = options.ignore;
+		const watchOptions: WatchOptions = {
+			...(options.persistent === undefined ? {} : { persistent: options.persistent }),
+			...(options.recursive === undefined ? {} : { recursive: options.recursive }),
+			...(options.encoding === undefined ? {} : { encoding: options.encoding }),
+			...(options.throwIfNoEntry === undefined ? {} : { throwIfNoEntry: options.throwIfNoEntry }),
+		};
+
+		if (typeof ignore !== 'function') {
+			return {
+				...watchOptions,
+				...(ignore === undefined ? {} : { ignore }),
+			};
+		}
+
+		return {
+			...watchOptions,
+			ignore,
+		};
+	}
+
+	/**
 	 * Validates runtime watch arguments to prevent unsafe configuration.
 	 * @param options The watcher options
 	 * @param handler Optional event handler
@@ -421,8 +502,8 @@ class Watchr extends EventEmitter implements Closable {
 			throw new Error('🚨 handler must be a function.');
 		}
 
-		if (options.ignore !== undefined && typeof options.ignore !== 'function') {
-			throw new Error('🚨 ignore must be a function.');
+		if (options.ignore !== undefined && !Watchr.isValidIgnoreOption(options.ignore)) {
+			throw new Error('🚨 ignore must be a function, string, RegExp, or array of these values.');
 		}
 
 		if (options.debounce !== undefined && (!Number.isFinite(options.debounce) || options.debounce < 0)) {
@@ -432,6 +513,14 @@ class Watchr extends EventEmitter implements Closable {
 		if (options.renameTimeout !== undefined && (!Number.isFinite(options.renameTimeout) || options.renameTimeout < 0)) {
 			throw new Error('🚨 renameTimeout must be a non-negative finite number.');
 		}
+
+		if (options.maxQueue !== undefined && (!Number.isInteger(options.maxQueue) || options.maxQueue <= 0)) {
+			throw new Error('🚨 maxQueue must be a positive integer.');
+		}
+
+		if (options.overflow !== undefined && options.overflow !== 'ignore' && options.overflow !== 'throw') {
+			throw new Error('🚨 overflow must be either "ignore" or "throw".');
+		}
 	}
 
 	/**
@@ -440,11 +529,28 @@ class Watchr extends EventEmitter implements Closable {
 	 * @returns Normalized watch options
 	 */
 	private static normalizeWatchOptions(options: WatchrOptions): WatchrOptions {
+		const usesNativeQueueOptions = options.maxQueue !== undefined || options.overflow !== undefined;
+
 		return {
 			...options,
-			debounce: options.debounce ?? debounceWait,
+			debounce: options.debounce ?? (usesNativeQueueOptions ? 0 : debounceWait),
 			renameTimeout: options.renameTimeout ?? renameTimeout
 		};
+	}
+
+	/**
+	 * Validates native and callback-style ignore options.
+	 * @param ignore The ignore option to validate.
+	 * @returns True if the ignore option is valid.
+	 */
+	private static isValidIgnoreOption(ignore: WatchIgnore): boolean {
+		if (typeof ignore === 'function' || typeof ignore === 'string' || ignore instanceof RegExp) {
+			return true;
+		}
+
+		if (!Array.isArray(ignore)) { return false }
+
+		return ignore.every((value) => typeof value === 'string' || value instanceof RegExp || typeof value === 'function');
 	}
 }
 

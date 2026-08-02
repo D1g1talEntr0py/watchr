@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import type { BigIntStats, FSWatcher } from 'node:fs';
+import type { BigIntStats, FSWatcher, WatchOptions } from 'node:fs';
 import type { WatchrStats } from '../watchr-stats';
 import type { FileSystemLocker } from '../file-system-locker';
 import type { FileSystemEventManager } from '../file-system-event-manager';
@@ -18,11 +18,10 @@ type InferredFunction<T = Function> = T extends (...args: infer P) => infer R ? 
 type TypedFunction<T extends (...args: Parameters<T>) => ReturnType<T>> = (...args: Parameters<T>) => ReturnType<T>;
 type AsyncTypedFunction<T extends (...args: Parameters<T>) => Promise<ReturnType<T>>> = (...args: Parameters<T>) => Promise<ReturnType<T>>;
 type Producer<R> = Function<never, R>;
-type Consumer<T, R = void> = Function<T, R>;
 type Callable = Function<never, void>;
 type AsyncCallable = Function<never, Promise<void>>;
 type Resolver = Function<never, void>;
-type Ignore = Consumer<Path, boolean>;
+type WatchIgnore = Exclude<WatchOptions['ignore'], undefined>;
 
 type MethodDescriptor<T extends TypedFunction<T> = Function> = TypedPropertyDescriptor<T>;
 type AsyncMethodDescriptor<T extends AsyncTypedFunction<T> = AsyncFunction> = TypedPropertyDescriptor<T>;
@@ -69,9 +68,12 @@ type WatchrOptions = {
 	recursive?: boolean;
 	encoding?: BufferEncoding;
   debounce?: number;
-  ignore?: Ignore;
+  ignore?: WatchIgnore;
   ignoreInitial?: boolean;
-	//TODO: Having a timeout for these sorts of things isn't exactly reliable, but what's the better option?
+	maxQueue?: number;
+	overflow?: 'ignore' | 'throw';
+	throwIfNoEntry?: boolean;
+	// TODO: Having a timeout for these sorts of things isn't exactly reliable, but what's the better option?
   renameTimeout?: number;
 };
 
@@ -96,7 +98,7 @@ export type {
 	Handler,
 	TargetEventEmitter,
 	NodeEventHandler,
-	Ignore,
+	WatchIgnore,
 	InodeNumber,
 	Path,
 	Stats,

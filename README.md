@@ -80,19 +80,33 @@ Watchr accepts the following options to customize behavior:
   - Supports any Node.js BufferEncoding
 
 - **`debounce`**: Debounce delay in milliseconds for event emission
-  - Default: `100ms`
+  - Default: `75ms`
   - Higher values reduce duplicate events but increase latency
 
-- **`ignore`**: Function to filter out unwanted paths
-  - Type: `(targetPath: string) => boolean`
-  - Return `true` to ignore the path and its children
+- **`ignore`**: Ignore matcher for paths
+  - Type: native Node `fs.watch` ignore matcher
+  - Callback form: `(filename: string) => boolean`
+  - Return `true` to ignore matching names
+  - Native form: string and regex patterns are matched against full path and basename
+  - String patterns also support glob-style matching (for example `**/*.log`)
 
 - **`ignoreInitial`**: Skip initial scan events when starting to watch
   - Default: `false`
   - When `true`, only new changes after watching starts will emit events
 
+- **`maxQueue`**: Reserved native queue option for forward compatibility
+  - Default: `undefined`
+  - Currently not applied in direct `fs.watch` mode
+
+- **`overflow`**: Reserved native queue overflow option for forward compatibility
+  - Values: `'ignore' | 'throw'`
+  - Currently not applied in direct `fs.watch` mode
+
+- **`throwIfNoEntry`**: Throw immediately if watched path does not exist
+  - Default: Node.js default (`true`)
+
 - **`renameTimeout`**: Timeout in milliseconds for rename detection
-  - Default: `250ms`
+  - Default: `150ms`
   - How long to wait to detect if separate add/unlink events are actually a rename
 
 ## Events
@@ -141,7 +155,7 @@ isReady(): boolean
 close(): void
 
 // Check if a path should be ignored
-isIgnored(targetPath: string, ignore?: Ignore): boolean
+isIgnored(targetPath: string, ignore?: WatchIgnore): boolean
 
 // Access the abort signal for cancellation
 get abortSignal(): AbortSignal
@@ -161,8 +175,11 @@ type WatchrOptions = {
   recursive?: boolean;
   encoding?: BufferEncoding;
   debounce?: number;
-  ignore?: (targetPath: string) => boolean;
+  ignore?: ((filename: string) => boolean) | string | RegExp | Array<string | RegExp | ((filename: string) => boolean)>;
   ignoreInitial?: boolean;
+  maxQueue?: number;
+  overflow?: 'ignore' | 'throw';
+  throwIfNoEntry?: boolean;
   renameTimeout?: number;
 };
 
@@ -177,6 +194,34 @@ type FileSystemEvent =
   | 'add' | 'addDir' | 'change'
   | 'rename' | 'renameDir'
   | 'unlink' | 'unlinkDir';
+```
+
+### Ignore Matching Semantics
+
+- Callback ignore (`(filename) => boolean`): native watcher-style matcher.
+- String ignore:
+  - Exact path and basename checks are supported.
+  - Glob patterns are supported via Node path glob semantics.
+  - Matching is attempted against both absolute path and basename.
+- RegExp ignore:
+  - Evaluated against full path, then basename.
+- Array ignore:
+  - Any matching pattern in the array ignores the path.
+
+Examples:
+
+```typescript
+// Ignore all .log files anywhere
+new Watchr('/repo', { ignore: '**/*.log' });
+
+// Ignore by basename
+new Watchr('/repo', { ignore: 'node_modules' });
+
+// Ignore with callback
+new Watchr('/repo', { ignore: (filename) => filename.endsWith('.map') });
+
+// Mixed native patterns
+new Watchr('/repo', { ignore: [ '**/*.tmp', /\.cache\// ] });
 ```
 
 ## Usage Examples

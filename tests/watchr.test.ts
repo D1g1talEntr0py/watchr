@@ -679,9 +679,11 @@ describe('Watchr', () => {
 			await watchr.readyLock;
 
 			const eventPromise = new Promise<void>((resolve) => {
-				watchr.on(FileSystemEvent.RENAME, (_stats, path, newPath) => {
+				watchr.on(FileSystemEvent.RENAME, (stats, path, newPath) => {
 					expect(path).toBe(join(testDir, 'old.txt'));
 					expect(newPath).toBe(join(testDir, 'new.txt'));
+					expect(stats).toBeDefined();
+					expect(typeof stats.size).toBe('number');
 					resolve();
 				});
 			});

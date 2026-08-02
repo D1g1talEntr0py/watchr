@@ -219,9 +219,86 @@ class Watchr extends EventEmitter implements Closable {
 	emitEvent(event: FileSystemEvent, targetPath: Path, targetPathNext?: Path): void {
 		if (this.isClosed()) { return }
 
-		const targetStats = this._renameHandler.fileStateManager.stats.get(targetPath);
+		const targetStats = this.resolveEventStats(targetPath, targetPathNext);
+
+		if (event === 'unlink' || event === 'unlinkDir') {
+			this.lastKnownStats.delete(targetPath);
+		} else {
+			this.lastKnownStats.set(targetPath, targetStats);
+			if (targetPathNext) {
+				this.lastKnownStats.set(targetPathNext, targetStats);
+			}
+		}
+
 		this.emit(WatcherEvent.ALL, event, targetStats, targetPath, targetPathNext);
 		this.emit(event, targetStats, targetPath, targetPathNext);
+	}
+
+	/**
+	 * Resolves event stats with fallbacks for rename/unlink edge cases.
+	 * @param targetPath Primary event path.
+	 * @param targetPathNext Optional secondary event path.
+	 * @returns A concrete stats object for downstream handlers.
+	 */
+	private resolveEventStats(targetPath: Path, targetPathNext?: Path): WatchrStats {
+		const fileStateStats = this._renameHandler.fileStateManager.stats;
+		const currentStats = fileStateStats.get(targetPath);
+
+		if (currentStats) { return currentStats }
+
+		if (targetPathNext) {
+			const nextStats = fileStateStats.get(targetPathNext);
+
+			if (nextStats) { return nextStats }
+		}
+
+		const cachedStats = this.lastKnownStats.get(targetPath) ?? (targetPathNext ? this.lastKnownStats.get(targetPathNext) : undefined);
+
+		return cachedStats ?? Watchr.createFallbackStats();
+	}
+
+	/**
+	 * Creates a synthetic stats snapshot for edge-case events where native
+	 * watchers do not provide enough information to recover a tracked stat.
+	 * @returns A synthetic stats object with default values.
+	 */
+	private static createFallbackStats(): WatchrStats {
+		const nowMs = Date.now();
+		const nowNs = BigInt(nowMs) * 1_000_000n;
+		const nowMsBigInt = BigInt(nowMs);
+		const fallbackStats: BigIntStats = {
+			ino: 0n,
+			size: 0n,
+			atimeNs: nowNs,
+			mtimeNs: nowNs,
+			ctimeNs: nowNs,
+			birthtimeNs: nowNs,
+			atimeMs: nowMsBigInt,
+			mtimeMs: nowMsBigInt,
+			ctimeMs: nowMsBigInt,
+			birthtimeMs: nowMsBigInt,
+			isFile: () => true,
+			isDirectory: () => false,
+			isSymbolicLink: () => false,
+			isBlockDevice: () => false,
+			isCharacterDevice: () => false,
+			isFIFO: () => false,
+			isSocket: () => false,
+			mode: 0n,
+			nlink: 0n,
+			uid: 0n,
+			gid: 0n,
+			rdev: 0n,
+			blksize: 0n,
+			blocks: 0n,
+			dev: 0n,
+			atime: new Date(nowMs),
+			mtime: new Date(nowMs),
+			ctime: new Date(nowMs),
+			birthtime: new Date(nowMs),
+		};
+
+		return new WatchrStats(fallbackStats);
 	}
 
 	/**

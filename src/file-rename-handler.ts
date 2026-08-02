@@ -11,6 +11,7 @@ export class FileRenameHandler {
 	private readonly fileLocks: FileSystemLocker;
 	private readonly directoryLocks: FileSystemLocker;
 	private readonly fileSystemStateManager: FileSystemStateManager;
+	private readonly lockResolver: LockResolver;
 
 	/**
 	 * Creates an instance of FileRenameHandler.
@@ -23,6 +24,7 @@ export class FileRenameHandler {
 		this.fileLocks = new FileSystemLocker();
 		this.directoryLocks = new FileSystemLocker();
 		this.fileSystemStateManager = new FileSystemStateManager();
+		this.lockResolver = new LockResolver();
 	}
 
 	/**
@@ -76,6 +78,7 @@ export class FileRenameHandler {
 	 * Resets the lock resolver.
 	 */
 	reset(): void {
+		this.lockResolver.reset();
 		this.fileSystemStateManager.reset();
 		this.directoryLocks.reset();
 		this.fileLocks.reset();
@@ -88,10 +91,21 @@ export class FileRenameHandler {
 	 * @returns void
 	 */
 	private addLock({ inodeNumber, targetPath, lockEvent, fileSystemLocker }: LockConfig, timeout: number = renameTimeout) {
+		if (inodeNumber !== undefined) {
+			const previousTargetPath = this.findSiblingPath(inodeNumber, targetPath);
+
+			if (previousTargetPath !== undefined) {
+				this.emitEvent(lockEvent.rename, previousTargetPath, targetPath);
+				return;
+			}
+		}
+
+		const immediate = timeout <= 0;
+
 		/** Emits the appropriate events based on the lock state. */
 		const emit = () => {
 			// Maybe this is actually a rename in a case-insensitive filesystem
-			const otherPath = this.fileSystemStateManager.paths.find(inodeNumber ?? -1, (path) => path !== targetPath);
+			const otherPath = inodeNumber !== undefined ? this.findSiblingPath(inodeNumber, targetPath) : undefined;
 
 			if (otherPath) {
 				this.emitEvent(lockEvent.rename, otherPath, targetPath);
@@ -102,10 +116,27 @@ export class FileRenameHandler {
 
 		if (!inodeNumber) { return emit() }
 
+		const pendingUnlink = fileSystemLocker.getUnlink(inodeNumber);
+
+		if (pendingUnlink !== undefined) {
+			const previousTargetPath = pendingUnlink();
+			fileSystemLocker.removeUnlink(inodeNumber);
+
+			if (targetPath === previousTargetPath) {
+				if (lockEvent.change && this.fileSystemStateManager.stats.has(targetPath)) {
+					this.emitEvent(lockEvent.change, targetPath);
+				}
+			} else {
+				this.emitEvent(lockEvent.rename, previousTargetPath, targetPath);
+			}
+
+			return;
+		}
+
 		/** Cleans up the lock state. */
 		const cleanup = () => {
 			fileSystemLocker.removeLock(inodeNumber);
-			LockResolver.remove(free);
+			this.lockResolver.remove(free);
 		};
 
 		/** Frees the lock and emits the appropriate events. */
@@ -114,14 +145,15 @@ export class FileRenameHandler {
 			emit();
 		};
 
-		LockResolver.add(free, timeout, () => this.emitError(new Error('🚨 Lock resolver capacity exceeded.')));
-
-		/** Resolves the lock and emits the appropriate events. */
+		/**
+		 * Resolves the lock and emits the appropriate events.
+		 * @returns True if a matching unlink lock was resolved.
+		 */
 		const resolve = () => {
 			const unlink = fileSystemLocker.getUnlink(inodeNumber);
 
 			// No matching "unlink" lock found, skipping
-			if (!unlink) { return }
+			if (!unlink) { return false }
 
 			cleanup();
 
@@ -133,11 +165,22 @@ export class FileRenameHandler {
 			} else {
 				this.emitEvent(lockEvent.rename, previousTargetPath, targetPath);
 			}
+
+			return true;
 		};
 
 		fileSystemLocker.addLock(inodeNumber, resolve);
 
-		resolve();
+		if (resolve()) { return }
+
+		if (immediate) {
+			fileSystemLocker.removeLock(inodeNumber);
+			emit();
+
+			return;
+		}
+
+		this.lockResolver.add(free, timeout, () => this.emitError(new Error('🚨 Lock resolver capacity exceeded.')));
 	}
 
 	/**
@@ -149,10 +192,19 @@ export class FileRenameHandler {
 	private unlinkLock({ inodeNumber, targetPath, lockEvent, fileSystemLocker }: LockConfig, timeout: number = renameTimeout) {
 		if (!inodeNumber) { return this.emitEvent(lockEvent.unlink, targetPath) }
 
+		const nextTargetPath = this.findSiblingPath(inodeNumber, targetPath);
+
+		if (nextTargetPath !== undefined) {
+			this.emitEvent(lockEvent.rename, targetPath, nextTargetPath);
+			return;
+		}
+
+		const immediate = timeout <= 0;
+
 		/** Cleans up the lock state. */
 		const cleanup = () => {
 			fileSystemLocker.removeUnlink(inodeNumber);
-			LockResolver.remove(free);
+			this.lockResolver.remove(free);
 		};
 
 		/** Frees the lock and emits the appropriate events. */
@@ -160,8 +212,6 @@ export class FileRenameHandler {
 			cleanup();
 			this.emitEvent(lockEvent.unlink, targetPath);
 		};
-
-		LockResolver.add(free, timeout, () => this.emitError(new Error('🚨 Lock resolver capacity exceeded.')));
 
 		/**
 		 * Overrides the unlink lock.
@@ -174,5 +224,27 @@ export class FileRenameHandler {
 
 		fileSystemLocker.addUnlink(inodeNumber, overridden);
 		fileSystemLocker.getLock(inodeNumber)?.();
+
+		// Resolved synchronously by an existing add lock.
+		if (fileSystemLocker.getUnlink(inodeNumber) === undefined) { return }
+
+		if (immediate && fileSystemLocker.getUnlink(inodeNumber) !== undefined) {
+			fileSystemLocker.removeUnlink(inodeNumber);
+			this.emitEvent(lockEvent.unlink, targetPath);
+
+			return;
+		}
+
+		this.lockResolver.add(free, timeout, () => this.emitError(new Error('🚨 Lock resolver capacity exceeded.')));
+	}
+
+	/**
+	 * Finds another tracked path for the same inode.
+	 * @param inodeNumber - The inode number to search for.
+	 * @param targetPath - Path to exclude from matches.
+	 * @returns The sibling path if found.
+	 */
+	private findSiblingPath(inodeNumber: number | bigint, targetPath: Path): Path | undefined {
+		return this.fileSystemStateManager.paths.find(inodeNumber, (path) => path !== targetPath);
 	}
 }

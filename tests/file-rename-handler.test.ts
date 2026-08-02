@@ -75,6 +75,61 @@ describe('FileRenameHandler', () => {
   });
 
   describe('Rename event', () => {
+    it('should not emit delayed UNLINK fallback when add lock resolves first', () => {
+      vi.useFakeTimers();
+
+      const originalPath: Path = '/path/to/file';
+      const renamedPath: Path = '/path/to/renamed-file';
+      const inodeNumber = 777;
+
+      vi.spyOn(fileSystemPoller, 'getInodeNumber').mockReturnValue(inodeNumber);
+
+      // Out-of-order delivery: ADD observed first, then UNLINK for the same inode.
+      fileRenameHandler.getLockTargetEvent(FileSystemEvent.ADD, renamedPath, 50);
+      fileRenameHandler.getLockTargetEvent(FileSystemEvent.UNLINK, originalPath, 50);
+
+      vi.advanceTimersByTime(200);
+
+      expect(emitEvent).toHaveBeenCalledWith(FileSystemEvent.RENAME, originalPath, renamedPath);
+      expect(emitEvent).not.toHaveBeenCalledWith(FileSystemEvent.UNLINK, originalPath);
+
+      vi.useRealTimers();
+    });
+
+    it('should emit RENAME immediately for ADD when a sibling inode path already exists', () => {
+      const originalPath: Path = '/path/to/file';
+      const renamedPath: Path = '/path/to/file-renamed';
+      const inodeNumber = 456;
+
+      const getInodeSpy = vi.spyOn(fileSystemPoller, 'getInodeNumber').mockReturnValue(inodeNumber);
+      const siblingSpy = vi.spyOn(fileSystemPoller.paths, 'find').mockReturnValue(originalPath);
+      const resolverSpy = vi.spyOn(fileRenameHandler['lockResolver'], 'add');
+
+      fileRenameHandler.getLockTargetEvent(FileSystemEvent.ADD, renamedPath, 250);
+
+      expect(getInodeSpy).toHaveBeenCalledWith(renamedPath, FileSystemEvent.ADD, InodeType.FILE);
+      expect(siblingSpy).toHaveBeenCalledWith(inodeNumber, expect.any(Function));
+      expect(emitEvent).toHaveBeenCalledWith(FileSystemEvent.RENAME, originalPath, renamedPath);
+      expect(resolverSpy).not.toHaveBeenCalled();
+    });
+
+    it('should emit RENAME immediately for UNLINK when destination inode path already exists', () => {
+      const originalPath: Path = '/path/to/file';
+      const renamedPath: Path = '/path/to/file-renamed';
+      const inodeNumber = 654;
+
+      const getInodeSpy = vi.spyOn(fileSystemPoller, 'getInodeNumber').mockReturnValue(inodeNumber);
+      const siblingSpy = vi.spyOn(fileSystemPoller.paths, 'find').mockReturnValue(renamedPath);
+      const resolverSpy = vi.spyOn(fileRenameHandler['lockResolver'], 'add');
+
+      fileRenameHandler.getLockTargetEvent(FileSystemEvent.UNLINK, originalPath, 250);
+
+      expect(getInodeSpy).toHaveBeenCalledWith(originalPath, FileSystemEvent.UNLINK, InodeType.FILE);
+      expect(siblingSpy).toHaveBeenCalledWith(inodeNumber, expect.any(Function));
+      expect(emitEvent).toHaveBeenCalledWith(FileSystemEvent.RENAME, originalPath, renamedPath);
+      expect(resolverSpy).not.toHaveBeenCalled();
+    });
+
     it('should emit a RENAME event when a file is moved', () => {
 			vi.useFakeTimers();
 			const originalPath: Path = '/path/to/file';
@@ -167,12 +222,36 @@ describe('FileRenameHandler', () => {
       expect(fileRenameHandler['directoryLocks']).toBeInstanceOf(FileSystemLocker);
       expect(fileRenameHandler['fileLocks']).toBeInstanceOf(FileSystemLocker);
     });
+
+    it('should not clear pending locks from a different handler', () => {
+      vi.useFakeTimers();
+
+      const firstEmitEvent = vi.fn();
+      const secondEmitEvent = vi.fn();
+      const firstHandler = new FileRenameHandler(firstEmitEvent, emitError);
+      const secondHandler = new FileRenameHandler(secondEmitEvent, emitError);
+
+      vi.spyOn(firstHandler.fileStateManager, 'getInodeNumber').mockReturnValue(1);
+      vi.spyOn(secondHandler.fileStateManager, 'getInodeNumber').mockReturnValue(1);
+
+      firstHandler.getLockTargetEvent(FileSystemEvent.ADD, '/first-file', 100);
+      secondHandler.getLockTargetEvent(FileSystemEvent.ADD, '/second-file', 100);
+
+      firstHandler.reset();
+
+      vi.advanceTimersByTime(100);
+
+      expect(firstEmitEvent).not.toHaveBeenCalled();
+      expect(secondEmitEvent).toHaveBeenCalledWith(FileSystemEvent.ADD, '/second-file');
+
+      vi.useRealTimers();
+    });
   });
 
   describe('lock overflow handling', () => {
     it('should emit a safe error when lock resolver capacity is exceeded', () => {
-      const originalMaxResolvers = (LockResolver as any).maxResolvers;
-      (LockResolver as any).maxResolvers = 1;
+      const originalMaxResolvers = (fileRenameHandler['lockResolver'] as any).maxResolvers;
+      (fileRenameHandler['lockResolver'] as any).maxResolvers = 1;
 
       vi.spyOn(fileSystemPoller, 'getInodeNumber').mockReturnValue(123);
 
@@ -181,7 +260,7 @@ describe('FileRenameHandler', () => {
 
       expect(emitError).toHaveBeenCalledWith(expect.objectContaining({ message: '🚨 Lock resolver capacity exceeded.' }));
 
-      (LockResolver as any).maxResolvers = originalMaxResolvers;
+      (fileRenameHandler['lockResolver'] as any).maxResolvers = originalMaxResolvers;
     });
   });
 });

@@ -1,12 +1,13 @@
 import { readdir, stat } from 'node:fs/promises';
-import { normalize, sep } from 'node:path';
+import { join, normalize, sep } from 'node:path';
 import { RetryQueue } from './retry-queue';
 import { timeout } from './decorators/timeout';
 import { FileSystemEntries } from './file-system-entries';
 import { setTimeout as setAsyncTimeout } from 'node:timers/promises';
 import type { DirectoryReadOptions, NodeError, NodeErrorCode, Stats } from './@types';
 
-const retryErrorCodes: Set<NodeErrorCode> = new Set([ 'ENOENT', 'EMFILE', 'ENFILE', 'EAGAIN', 'EBUSY', 'EACCESS', 'EACCES', 'EACCS', 'EPERM' ]);
+const retryErrorCodes: Set<NodeErrorCode> = new Set([ 'EMFILE', 'ENFILE', 'EAGAIN', 'EBUSY', 'EACCESS', 'EACCES', 'EACCS', 'EPERM' ]);
+const recursiveReadUnsupportedErrorCodes = new Set([ 'ERR_INVALID_ARG_VALUE', 'ERR_INVALID_OPT_VALUE' ]);
 
 /**
  * Checks if the error is a Node.js error.
@@ -33,46 +34,78 @@ export class FileSystem {
 	 * @returns A promise that resolves to a FileSystemEntries object containing the directory contents.
 	 */
 	static async readDirectory(rootPath: string, { ignore = () => false, signal }: DirectoryReadOptions = {}): Promise<FileSystemEntries> {
-		const visited = new Set<string>();
 		const fileSystemEntries = new FileSystemEntries();
-
-		/**
-		 * Populates the result from the given path.
-		 * @param rootPath - The root path to populate from.
-		 * @returns A promise that resolves when the population is complete.
-		 */
-		const populateResultFromPath = async (rootPath: string) => {
-			if (signal?.aborted) { return }
-
-			const subPathPrefix = `${rootPath}${rootPath === sep ? '' : sep}`;
-			const subdirectoriesToProcess: string[] = [];
-
-			for (const directoryEntry of await readdir(rootPath, { withFileTypes: true })) {
-				const subPath = `${subPathPrefix}${directoryEntry.name}`;
-
-				if (ignore(subPath) || visited.has(subPath)) { continue }
-
-				visited.add(subPath);
-
-				if (directoryEntry.isDirectory()) {
-					fileSystemEntries.addDirectory(subPath);
-					subdirectoriesToProcess.push(subPath);
-				} else if (directoryEntry.isFile()) {
-					fileSystemEntries.addFile(subPath);
-				}
-			}
-
-			// Parallelize sibling directory processing for better latency
-			if (subdirectoriesToProcess.length > 0) {
-				await Promise.all(subdirectoriesToProcess.map((subPath) => populateResultFromPath(subPath)));
-			}
-		};
 
 		rootPath = normalize(rootPath);
 
-		visited.add(rootPath);
+		const readWithNativeRecursion = async (): Promise<boolean> => {
+			try {
+				const entries = await readdir(rootPath, { recursive: true, withFileTypes: true });
 
-		await populateResultFromPath(rootPath);
+				for (const entry of entries) {
+					if (signal?.aborted) { break }
+
+					const parentPath = 'parentPath' in entry && typeof entry.parentPath === 'string' ? entry.parentPath : rootPath;
+					const subPath = normalize(join(parentPath, entry.name));
+
+					if (ignore(subPath)) { continue }
+
+					if (entry.isDirectory()) {
+						fileSystemEntries.addDirectory(subPath);
+					} else if (entry.isFile()) {
+						fileSystemEntries.addFile(subPath);
+					}
+				}
+
+				return true;
+			} catch (error: unknown) {
+				const errorCode = isNodeError(error) && typeof error.code === 'string' ? error.code : undefined;
+
+				if (errorCode === undefined || !recursiveReadUnsupportedErrorCodes.has(errorCode)) {
+					throw error;
+				}
+
+				return false;
+			}
+		};
+
+		const readWithManualTraversal = async () => {
+			const visited = new Set<string>([ rootPath ]);
+
+			const populateResultFromPath = async (currentPath: string) => {
+				if (signal?.aborted) { return }
+
+				const subPathPrefix = `${currentPath}${currentPath === sep ? '' : sep}`;
+				const subdirectoriesToProcess: string[] = [];
+
+				for (const directoryEntry of await readdir(currentPath, { withFileTypes: true })) {
+					const subPath = `${subPathPrefix}${directoryEntry.name}`;
+
+					if (ignore(subPath) || visited.has(subPath)) { continue }
+
+					visited.add(subPath);
+
+					if (directoryEntry.isDirectory()) {
+						fileSystemEntries.addDirectory(subPath);
+						subdirectoriesToProcess.push(subPath);
+					} else if (directoryEntry.isFile()) {
+						fileSystemEntries.addFile(subPath);
+					}
+				}
+
+				if (subdirectoriesToProcess.length > 0) {
+					await Promise.all(subdirectoriesToProcess.map((subPath) => populateResultFromPath(subPath)));
+				}
+			};
+
+			await populateResultFromPath(rootPath);
+		};
+
+		const nativeRecursiveReadUsed = await readWithNativeRecursion();
+
+		if (!nativeRecursiveReadUsed) {
+			await readWithManualTraversal();
+		}
 
 		return signal?.aborted ? fileSystemEntries.reset() : fileSystemEntries;
 	}
@@ -84,7 +117,6 @@ export class FileSystem {
 	 */
 	@timeout()
 	static async getStats(targetPath: string): Promise<Stats | undefined> {
-		const clearQueue = await FileSystem.retryQueue.schedule<Stats>();
 		let retries = 0;
 
 		/**
@@ -93,8 +125,6 @@ export class FileSystem {
 		 * @returns A promise that resolves to the stats or undefined.
 		 */
 		const handleRejection = async (error: unknown): Promise<Stats | undefined> => {
-			clearQueue();
-
 			if (!isNodeError(error) || !retryErrorCodes.has(error.code)) { return }
 
 			if (retries >= FileSystem.maxStatRetries) { return }
@@ -112,9 +142,14 @@ export class FileSystem {
 		 * @returns A promise that resolves to the stats or undefined if not found.
 		 */
 		const getStatsWithTimeout = async (targetPath: string): Promise<Stats | undefined> => {
+			// Each attempt takes its own queue slot so retries stay throttled under descriptor pressure.
+			const clearQueue = await FileSystem.retryQueue.schedule<Stats>();
+
 			try {
 				return clearQueue(await stat(targetPath, { bigint: true }));
 			} catch (error: unknown) {
+				clearQueue();
+
 				return handleRejection(error);
 			}
 		};

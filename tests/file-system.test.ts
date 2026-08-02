@@ -102,6 +102,52 @@ describe('FileSystem', () => {
 			const expected = new FileSystemEntries().addFile(expectedPath);
 			expect(result).toEqual(expected);
 		});
+
+		it('should attempt native recursive directory reads', async () => {
+			const fsPromises = await import('node:fs/promises');
+			const readdirSpy = vi.spyOn(fsPromises, 'readdir');
+
+			await FileSystem.readDirectory(mockDirectory);
+
+			expect(readdirSpy).toHaveBeenCalledWith(mockDirectory, expect.objectContaining({
+				recursive: true,
+				withFileTypes: true,
+			}));
+		});
+
+		it('should fall back to manual traversal when recursive reads are unsupported', async () => {
+			const fsPromises = await import('node:fs/promises');
+			const originalReaddir = fsPromises.readdir.bind(fsPromises);
+			const readdirSpy = vi.spyOn(fsPromises, 'readdir').mockImplementation((path, options) => {
+				if (typeof options === 'object' && options !== null && 'recursive' in options) {
+					const unsupportedError = Object.assign(new Error('recursive reads unsupported'), {
+						code: 'ERR_INVALID_ARG_VALUE',
+					});
+
+					return Promise.reject(unsupportedError);
+				}
+
+				return originalReaddir(path as string, options as { withFileTypes?: boolean });
+			});
+
+			const result = await FileSystem.readDirectory(mockDirectory);
+			const expected = new FileSystemEntries()
+				.addDirectory(emptyDirectory)
+				.addDirectory(notEmptyDirectory)
+				.addFile(emptyFile)
+				.addFile(notEmptyFile);
+
+			result.files.sort();
+			result.directories.sort();
+			expected.files.sort();
+			expected.directories.sort();
+
+			expect(result).toEqual(expected);
+			expect(readdirSpy).toHaveBeenCalledWith(mockDirectory, expect.objectContaining({
+				recursive: true,
+				withFileTypes: true,
+			}));
+		});
   });
 
 	describe('getStats', () => {
@@ -112,25 +158,21 @@ describe('FileSystem', () => {
 		});
 
 		it('should retry on specific error codes', async () => {
-        // Rename the file temporarily using memfs
-        const tempRenamedFilePath = join(mockDirectory, 'temp-renamed-file.txt');
-        vol.renameSync(emptyFile, tempRenamedFilePath);
+			const originalStat = vol.promises.stat.bind(vol.promises);
+			const statSpy = vi.spyOn(vol.promises, 'stat');
+			const retryableError = Object.assign(new Error('busy'), { code: 'EBUSY' as const });
 
-        // Poll the file, expecting retries to occur
-        const pollPromise = FileSystem.getStats(emptyFile);
+			statSpy
+				.mockRejectedValueOnce(retryableError)
+				.mockImplementation(async (path, options) => originalStat(path as string, options));
 
-        // Restore the original file name after a short delay
-        setTimeout(() => {
-					vol.renameSync(tempRenamedFilePath, emptyFile);
-		}, 0);
+			const result = await FileSystem.getStats(emptyFile);
 
-        const result = await pollPromise;
-
-        // Expect the result to be valid stats after retries
-        expect(result).toBeDefined();
-        expect(typeof result?.isFile).toBe('function');
-        expect(result?.isFile()).toBe(true);
-    });
+			expect(result).toBeDefined();
+			expect(typeof result?.isFile).toBe('function');
+			expect(result?.isFile()).toBe(true);
+			expect(statSpy.mock.calls.length).toBeGreaterThan(1);
+		});
 
 		it('should stop retrying after max retry attempts for retryable errors', async () => {
 			const retryableError = Object.assign(new Error('too many open files'), { code: 'EMFILE' as const });

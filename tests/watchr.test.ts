@@ -82,8 +82,108 @@ describe('Watchr', () => {
 				expect(() => new Watchr(testDir, { renameTimeout: -1 })).toThrow('renameTimeout must be a non-negative finite number');
 			});
 
+			it('should throw for invalid maxQueue option', () => {
+				expect(() => new Watchr(testDir, { maxQueue: 0 })).toThrow('maxQueue must be a positive integer');
+			});
+
+			it('should throw for invalid overflow option', () => {
+				expect(() => new Watchr(testDir, { overflow: 'drop' as unknown as WatchrOptions['overflow'] })).toThrow('overflow must be either "ignore" or "throw"');
+			});
+
 			it('should throw for invalid ignore option', () => {
-				expect(() => new Watchr(testDir, { ignore: true as unknown as WatchrOptions['ignore'] })).toThrow('ignore must be a function');
+				expect(() => new Watchr(testDir, { ignore: true as unknown as WatchrOptions['ignore'] })).toThrow('ignore must be a function, string, RegExp, or array of these values');
+			});
+
+			it('should accept native ignore patterns', () => {
+				let watchr: Watchr | undefined;
+
+				expect(() => {
+					watchr = new Watchr(testDir, { ignore: /ignored\\.txt$/ });
+				}).not.toThrow();
+
+				watchr?.close();
+			});
+
+			it('should accept throwIfNoEntry option', () => {
+				let watchr: Watchr | undefined;
+
+				expect(() => {
+					watchr = new Watchr(testDir, { throwIfNoEntry: false });
+				}).not.toThrow();
+
+				watchr?.close();
+			});
+
+			it('should keep using fs.watch when maxQueue is provided', async () => {
+				watch.mockClear();
+				const watchr = new Watchr(testDir, { maxQueue: 64 });
+				await watchr.readyLock;
+
+				expect(watch).toHaveBeenCalled();
+
+				watchr.close();
+			});
+
+			it('should default debounce to 0 when native queue options are used', async () => {
+				const watchr = new Watchr(testDir, { maxQueue: 64 });
+				await watchr.readyLock;
+
+				expect((watchr as any).watchers[testDir][0].options.debounce).toBe(0);
+
+				watchr.close();
+			});
+
+			it('should keep configured debounce when native queue options are used', async () => {
+				const watchr = new Watchr(testDir, { maxQueue: 64, debounce: 25 });
+				await watchr.readyLock;
+
+				expect((watchr as any).watchers[testDir][0].options.debounce).toBe(25);
+
+				watchr.close();
+			});
+
+			it('should keep classic debounce default without native queue options', async () => {
+				const watchr = new Watchr(testDir);
+				await watchr.readyLock;
+
+				expect((watchr as any).watchers[testDir][0].options.debounce).toBe(debounceWait);
+
+				watchr.close();
+			});
+
+			it('should keep using fs.watch when overflow is provided', async () => {
+				watch.mockClear();
+				const watchr = new Watchr(testDir, { overflow: 'throw' });
+				await watchr.readyLock;
+
+				expect(watch).toHaveBeenCalled();
+
+				watchr.close();
+			});
+
+			it('should keep using fs.watch when queue options are absent', async () => {
+				watch.mockClear();
+				const watchr = new Watchr(testDir);
+				await watchr.readyLock;
+
+				expect(watch).toHaveBeenCalled();
+
+				watchr.close();
+			});
+
+			it('should forward AbortSignal to fs.watch', async () => {
+				watch.mockClear();
+
+				const watchr = new Watchr(testDir);
+				await watchr.readyLock;
+
+				expect(watch).toHaveBeenCalled();
+
+				const firstCallOptions = watch.mock.calls[0]?.[1] as WatchrOptions;
+				expect(firstCallOptions).toBeDefined();
+				expect(firstCallOptions.signal).toBe((watchr as any)._abortSignal);
+
+				watchr.close();
 			});
 
 		it('should start watching paths provided in the constructor', async () => {
@@ -102,6 +202,43 @@ describe('Watchr', () => {
 			createTestFile('newfile.txt');
 
 			await eventPromise;
+			watchr.close();
+		});
+
+		it('should apply native ignore patterns during initial scan', async () => {
+			const ignoredFilePath = join(testDir, 'ignored.log');
+			const includedFilePath = join(testDir, 'included.txt');
+			createTestFile('ignored.log');
+			createTestFile('included.txt');
+
+			const watchr = new Watchr(testDir, { ignore: /\.log$/ });
+
+			await watchr.readyLock;
+
+			const statsMap = (watchr as any).watchers[testDir][0].eventManager.fileSystemPoller.stats as Map<string, unknown>;
+
+			expect(statsMap.has(includedFilePath)).toBe(true);
+			expect(statsMap.has(ignoredFilePath)).toBe(false);
+
+			watchr.close();
+		});
+
+		it('should apply glob-like native string ignores during initial scan', async () => {
+			const logsDirectory = join(testDir, 'logs');
+			mkdirSync(logsDirectory, { recursive: true });
+			const ignoredFilePath = join(logsDirectory, 'ignored.log');
+			const includedFilePath = join(logsDirectory, 'included.txt');
+			writeFileSync(ignoredFilePath, 'ignored');
+			writeFileSync(includedFilePath, 'included');
+
+			const watchr = new Watchr(testDir, { ignore: '**/*.log' });
+			await watchr.readyLock;
+
+			const statsMap = (watchr as any).watchers[testDir][0].eventManager.fileSystemPoller.stats as Map<string, unknown>;
+
+			expect(statsMap.has(includedFilePath)).toBe(true);
+			expect(statsMap.has(ignoredFilePath)).toBe(false);
+
 			watchr.close();
 		});
 
@@ -343,6 +480,20 @@ describe('Watchr', () => {
 			await (watchr as any).watchFile(filePath, {});
 
 			expect(watch).not.toHaveBeenCalled();
+		});
+
+		it('should watch file targets directly with fs.watch', async () => {
+			const filePath = join(testDir, 'direct-file.txt');
+			createTestFile('direct-file.txt');
+
+			watch.mockClear();
+			const watchr = new Watchr(filePath);
+			await watchr.readyLock;
+
+			expect(watch).toHaveBeenCalled();
+			expect(watch.mock.calls[0]?.[0]).toBe(filePath);
+
+			watchr.close();
 		});
 	});
 

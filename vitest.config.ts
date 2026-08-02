@@ -33,12 +33,6 @@ export default defineConfig({
 			reportsDirectory: 'tests/coverage',
       include: [ 'src/**/*.ts' ],
 			exclude: [ 'src/index.ts', 'src/@types' ]
-    },
-		benchmark: {
-			include: [ 'benchmarks/**/*.bench.ts' ],
-			exclude: [],
-			outputFile: './benchmarks/results.json',
-			include: [ 'benchmarks/**/*.bench.ts' ]
 		}
 	}
 });

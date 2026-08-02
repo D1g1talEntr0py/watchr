@@ -37,6 +37,7 @@ export class FileSystem {
 		const fileSystemEntries = new FileSystemEntries();
 
 		rootPath = normalize(rootPath);
+		const windowsDrivePrefix = /^[A-Za-z]:/.exec(rootPath)?.[0];
 
 		const readWithNativeRecursion = async (): Promise<boolean> => {
 			try {
@@ -45,7 +46,12 @@ export class FileSystem {
 				for (const entry of entries) {
 					if (signal?.aborted) { break }
 
-					const parentPath = 'parentPath' in entry && typeof entry.parentPath === 'string' ? entry.parentPath : rootPath;
+					let parentPath = 'parentPath' in entry && typeof entry.parentPath === 'string' ? entry.parentPath : rootPath;
+
+					if (windowsDrivePrefix !== undefined && /^[\\/](?![\\/])/.test(parentPath)) {
+						parentPath = `${windowsDrivePrefix}${parentPath}`;
+					}
+
 					const subPath = normalize(join(parentPath, entry.name));
 
 					if (ignore(subPath)) { continue }

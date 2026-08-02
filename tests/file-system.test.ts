@@ -148,6 +148,36 @@ describe('FileSystem', () => {
 				withFileTypes: true,
 			}));
 		});
+
+		it('should preserve Windows drive prefixes for root-relative recursive entry parent paths', async () => {
+			const fsPromises = await import('node:fs/promises');
+			const windowsRootPath = 'D:\\a\\watchr\\watchr\\tests\\mocked-fs';
+			const windowsParentPath = '\\a\\watchr\\watchr\\tests\\mocked-fs\\not-empty';
+			const expectedFilePath = 'D:\\a\\watchr\\watchr\\tests\\mocked-fs\\not-empty\\not-empty.txt';
+
+			const readdirSpy = vi.spyOn(fsPromises, 'readdir').mockImplementation(async (_path, options) => {
+				if (typeof options === 'object' && options !== null && 'recursive' in options) {
+					return [ {
+						name: 'not-empty.txt',
+						parentPath: windowsParentPath,
+						isDirectory: () => false,
+						isFile: () => true,
+					} ] as never;
+				}
+
+				return [] as never;
+			});
+
+			const result = await FileSystem.readDirectory(windowsRootPath);
+			const normalizedResult = new FileSystemEntries().addFile(result.files[0]?.replaceAll('/', '\\') ?? '');
+			const expected = new FileSystemEntries().addFile(expectedFilePath);
+
+			expect(normalizedResult).toEqual(expected);
+			expect(readdirSpy).toHaveBeenCalledWith(windowsRootPath, expect.objectContaining({
+				recursive: true,
+				withFileTypes: true,
+			}));
+		});
   });
 
 	describe('getStats', () => {

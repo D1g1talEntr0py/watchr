@@ -1,14 +1,15 @@
 import { dirname, resolve } from 'node:path';
-import { FileSystem } from './file-system';
-import { debounce } from './decorators/debounce';
-import { NodeWatcherEvent, NodeTargetEvent, FileSystemEvent, debounceWait, isWindows } from './constants';
 import type { FSWatcher } from 'node:fs';
+import { FileSystem } from './file-system';
+import { NodeWatcherEvent, NodeTargetEvent, FileSystemEvent, debounceWait, isWindows } from './constants';
+import { debounce } from './utils';
 import type { Watchr } from './watchr';
 import type { FileSystemStateManager } from './file-system-state-manager';
 import type { Event, NodeEventHandler, Path, WatchrOptions, WatchrConfig } from './@types';
 
 /** Manages file system events for a specific folder */
 export class FileSystemEventManager {
+	private static readonly hintedRenameTimeout: number = 5;
 	private lock: Promise<void>;
 	private readonly fileSystemPoller: FileSystemStateManager;
 	private readonly watchr: Watchr;
@@ -19,6 +20,10 @@ export class FileSystemEventManager {
 	private readonly initials: Event[];
 	private readonly regulars: Set<Path>;
 	private readonly nodeEventHandler: NodeEventHandler;
+	private readonly flushHandler: () => void;
+	private hasRenameHintInBatch: boolean;
+	private flushQueued: boolean;
+	private flushAfterLockScheduled: boolean;
 	private readonly watcherChangeHandler: (event?: NodeTargetEvent, targetName?: string) => void;
 	private readonly watcherErrorHandler: (error: NodeJS.ErrnoException) => void;
 
@@ -34,9 +39,30 @@ export class FileSystemEventManager {
 		this.watchr = watchr;
 		this.initials = [];
 		this.regulars = new Set();
+		this.hasRenameHintInBatch = false;
+		this.flushQueued = false;
+		this.flushAfterLockScheduled = false;
 		this.watcherChangeHandler = this.onWatcherChange.bind(this);
 		this.watcherErrorHandler = this.handleWatchrError.bind(this);
 		({ watcher: this.watcher, options: this.options, folderPath: this.folderPath, filePath: this.filePath, nodeHandler: this.nodeEventHandler = this.generateNodeEventHandler() } = watcherConfig);
+
+		const debounceMs = this.options.debounce ?? debounceWait;
+
+		if (debounceMs <= 0) {
+			this.flushHandler = () => {
+				if (this.flushQueued) { return }
+
+				this.flushQueued = true;
+
+				queueMicrotask(() => {
+					this.flushQueued = false;
+					this.flush();
+				});
+			};
+		} else {
+			const flushDebounced = debounce(this.flush.bind(this), debounceMs);
+			this.flushHandler = () => { void flushDebounced() };
+		}
 	}
 
 	/**
@@ -69,9 +95,10 @@ export class FileSystemEventManager {
 			await this.onWatcherEvent(NodeTargetEvent.CHANGE, this.filePath, isInitial);
 		} else {
 			// Multiple initial paths
+			const ignore = (targetPath: Path) => this.watchr.isIgnored(targetPath, this.options.ignore);
 			const { directories, files } = await FileSystem.readDirectory(this.folderPath, {
 				signal: this.watchr.abortSignal,
-				...(this.options.ignore === undefined ? {} : { ignore: this.options.ignore }),
+				ignore,
 			});
 
 			await Promise.all([ this.folderPath, ...directories, ...files ].map(async (targetPath) => {
@@ -109,19 +136,42 @@ export class FileSystemEventManager {
 	 * @returns A Promise that resolves when the lock is acquired
 	 */
 	private async getLock(): Promise<void> {
-		this.onTargetEvents(this.deduplicateEvents([ ...(this.options.ignoreInitial ? [] : this.initials), ...(await this.populateEvents(Array.from(this.regulars))) ]));
+		const includeInitials = !this.options.ignoreInitial && this.initials.length > 0;
+
+		if (!includeInitials && this.regulars.size === 0) { return }
+
+		if (!includeInitials && this.regulars.size === 1) {
+			const singleTargetPath: Path | undefined = this.regulars.values().next().value;
+
+			if (singleTargetPath === undefined) { return }
+
+			const singleEvents = await this.fileSystemPoller.update(singleTargetPath);
+
+			if (singleEvents.length === 0) { return }
+
+			this.onTargetEvents(singleEvents.map<Event>((event) => [ event, singleTargetPath ]));
+
+			return;
+		}
+
+		const regularEvents = await this.populateEvents(this.regulars);
+		const allEvents = includeInitials ? [ ...this.initials, ...regularEvents ] : regularEvents;
+
+		if (allEvents.length === 0) { return }
+
+		this.onTargetEvents(this.deduplicateEvents(allEvents));
 	}
 
 	/**
-	 * Flushes the current event batch
+	 * Flushes the current event batch.
 	 */
-	@debounce(debounceWait)
 	private flush() {
 		if (this.watchr.isClosed()) { return }
 
 		this.lock = this.getLock();
 		this.initials.length = 0;
 		this.regulars.clear();
+		this.hasRenameHintInBatch = false;
 	}
 
 	/**
@@ -136,10 +186,37 @@ export class FileSystemEventManager {
 			} else {
 				// Poll later
 				this.regulars.add(targetPath);
+
+				if (_event === NodeTargetEvent.RENAME) {
+					this.hasRenameHintInBatch = true;
+				}
 			}
 
-			void this.lock.then(this.flush.bind(this));
+			this.scheduleFlushAfterLock();
 		};
+	}
+
+	/**
+	 * Schedules a single flush once the current lock chain settles.
+	 */
+	private scheduleFlushAfterLock(): void {
+		if (this.flushAfterLockScheduled) { return }
+
+		this.flushAfterLockScheduled = true;
+
+		void this.lock.then(() => this.onFlushAfterLock()).catch((error) => {
+			this.flushAfterLockScheduled = false;
+			this.watchr.error(error);
+			this.flushHandler();
+		});
+	}
+
+	/**
+	 * Runs when the current lock chain resolves.
+	 */
+	private onFlushAfterLock(): void {
+		this.flushAfterLockScheduled = false;
+		this.flushHandler();
 	}
 
 	/**
@@ -150,24 +227,39 @@ export class FileSystemEventManager {
 	private deduplicateEvents(events: Event[]) {
 		if (events.length < 2) { return events }
 
-		const previousEventTargets = new Map<Path, FileSystemEvent>();
+		const eventPriorities = new Map<FileSystemEvent, number>([
+			[ FileSystemEvent.ADD, 4 ],
+			[ FileSystemEvent.ADD_DIR, 4 ],
+			[ FileSystemEvent.CHANGE, 3 ],
+			[ FileSystemEvent.RENAME, 2 ],
+			[ FileSystemEvent.RENAME_DIR, 2 ],
+			[ FileSystemEvent.UNLINK, 1 ],
+			[ FileSystemEvent.UNLINK_DIR, 1 ],
+		]);
+		const uniqueEvents: Event[] = [];
+		const eventIndexes = new Map<Path, number>();
 
-		return events.reduce<Event[]>((uniqueEvents, event): Event[] => {
+		for (const event of events) {
 			const [ targetEvent, targetPath ] = event;
-			const previousEventTarget = previousEventTargets.get(targetPath);
+			const existingIndex = eventIndexes.get(targetPath);
 
-			// Same event, ignoring
-			if (targetEvent === previousEventTarget) { return uniqueEvents }
+			if (existingIndex === undefined) {
+				eventIndexes.set(targetPath, uniqueEvents.length);
+				uniqueEvents.push(event);
 
-			// "change" after "add", ignoring
-			if (targetEvent === FileSystemEvent.CHANGE && previousEventTarget === FileSystemEvent.ADD) { return uniqueEvents }
+				continue;
+			}
 
-			previousEventTargets.set(targetPath, targetEvent);
+			const previousEvent = uniqueEvents[existingIndex]!;
+			const previousPriority = eventPriorities.get(previousEvent[0]) ?? 0;
+			const currentPriority = eventPriorities.get(targetEvent) ?? 0;
 
-			uniqueEvents.push(event);
+			if (currentPriority > previousPriority) {
+				uniqueEvents[existingIndex] = event;
+			}
+		}
 
-			return uniqueEvents;
-		}, []);
+		return uniqueEvents;
 	}
 
 	/**
@@ -176,8 +268,10 @@ export class FileSystemEventManager {
 	 * @param events The events to populate
 	 * @returns The populated events
 	 */
-	private async populateEvents(targetPaths: Path[], events: Event[] = []) {
-		await Promise.all(targetPaths.map(async (targetPath) => {
+	private async populateEvents(targetPaths: Iterable<Path>, events: Event[] = []) {
+		const paths = Array.from(targetPaths, (targetPath): Path => targetPath);
+
+		await Promise.all(paths.map(async (targetPath) => {
 			for (const event of await this.fileSystemPoller.update(targetPath)) {
 				events.push([ event, targetPath ]);
 			}
@@ -201,12 +295,26 @@ export class FileSystemEventManager {
 
 			if (this.isSubRoot(targetPath)) {
 				if (targetEvent !== FileSystemEvent.CHANGE) {
-					this.watchr.renameWatchr.getLockTargetEvent(targetEvent, targetPath, this.options.renameTimeout);
+					this.watchr.renameWatchr.getLockTargetEvent(targetEvent, targetPath, this.getRenameTimeout());
 				} else {
 					this.watchr.emitEvent(targetEvent, targetPath);
 				}
 			}
 		}
+	}
+
+	/**
+	 * Selects an adaptive timeout for rename lock resolution.
+	 * @returns Timeout to use for lock fallback.
+	 */
+	private getRenameTimeout(): number | undefined {
+		const configuredTimeout = this.options.renameTimeout;
+
+		if (configuredTimeout === undefined || configuredTimeout <= 0) { return configuredTimeout }
+
+		if (!this.hasRenameHintInBatch) { return configuredTimeout }
+
+		return Math.min(configuredTimeout, FileSystemEventManager.hintedRenameTimeout);
 	}
 
 	/**
@@ -228,7 +336,9 @@ export class FileSystemEventManager {
 	private onWatcherChange(event: NodeTargetEvent = NodeTargetEvent.CHANGE, targetName: string = '') {
 		if (this.watchr.isClosed()) { return }
 
-		const targetPath = resolve(this.folderPath, targetName);
+		const targetPath = targetName === '' && this.filePath
+			? this.filePath
+			: resolve(this.folderPath, targetName);
 
 		if ((this.filePath && targetPath !== this.folderPath && targetPath !== this.filePath) || this.watchr.isIgnored(targetPath, this.options.ignore)) { return }
 

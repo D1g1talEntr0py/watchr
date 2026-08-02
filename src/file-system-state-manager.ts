@@ -4,13 +4,14 @@ import { WatchrStats } from './watchr-stats';
 import { FileSystemEvent, InodeType } from './constants';
 import type { InodeNumber, Path } from './@types';
 
-type EventInodeRecord = Partial<Record<FileSystemEvent, Record<Path, [InodeNumber, InodeType]>>>;
+type InodeEntry = { event: FileSystemEvent, targetPath: Path, inodeNumber: InodeNumber, inodeType: InodeType };
 
 /** Polls the file system for changes */
 export class FileSystemStateManager {
 	private static readonly maxTrackedEventInodes: number = 50000;
-	private readonly targetInodes: EventInodeRecord = {};
-	private readonly targetInodeOrder = new Map<string, { event: FileSystemEvent, targetPath: Path }>();
+	private readonly targetInodes = new Map<FileSystemEvent, Map<Path, InodeEntry>>();
+	/** Insertion-ordered LRU view over the entries held by {@link targetInodes}. */
+	private readonly targetInodeOrder = new Set<InodeEntry>();
 	private readonly _paths = new SetMultiMap<InodeNumber, Path>();
 	private readonly _stats = new Map<Path, WatchrStats>();
 
@@ -38,9 +39,11 @@ export class FileSystemStateManager {
 	 * @returns The inode number if it exists, otherwise undefined.
 	 */
 	getInodeNumber(targetPath: Path, event: FileSystemEvent, type?: InodeType): InodeNumber | undefined {
-		const [ inodeNumber, inodeType ] = this.targetInodes[event]?.[targetPath] ?? [];
+		const entry = this.targetInodes.get(event)?.get(targetPath);
 
-		return type && inodeType !== type ? undefined : inodeNumber;
+		if (entry === undefined) { return undefined }
+
+		return type !== undefined && entry.inodeType !== type ? undefined : entry.inodeNumber;
 	}
 
 	/**
@@ -107,16 +110,7 @@ export class FileSystemStateManager {
 	reset(): void {
 		this._paths.clear();
 		this._stats.clear();
-		for (const [ event, eventInodes ] of Object.entries(this.targetInodes) as Array<[FileSystemEvent, Record<Path, [InodeNumber, InodeType]>]>) {
-			if (!eventInodes) { continue }
-
-			for (const targetPath of Object.keys(eventInodes)) {
-				delete eventInodes[targetPath];
-			}
-
-			delete this.targetInodes[event];
-		}
-
+		this.targetInodes.clear();
 		this.targetInodeOrder.clear();
 	}
 
@@ -140,15 +134,27 @@ export class FileSystemStateManager {
 	 * @param stats - The stats for the path.
 	 */
 	private updateInode(targetPath: Path, event: FileSystemEvent, stats: WatchrStats) {
-		const eventInodes = this.targetInodes[event] ??= {};
-		eventInodes[targetPath] = [ stats.inodeNumber, stats.isFile() ? InodeType.FILE : InodeType.DIR ];
+		let eventInodes = this.targetInodes.get(event);
 
-		const inodeEventKey = `${event}:${targetPath}`;
-		if (this.targetInodeOrder.has(inodeEventKey)) {
-			this.targetInodeOrder.delete(inodeEventKey);
+		if (eventInodes === undefined) { this.targetInodes.set(event, eventInodes = new Map<Path, InodeEntry>()) }
+
+		const inodeType = stats.isFile() ? InodeType.FILE : InodeType.DIR;
+		const existingEntry = eventInodes.get(targetPath);
+
+		if (existingEntry !== undefined) {
+			existingEntry.inodeNumber = stats.inodeNumber;
+			existingEntry.inodeType = inodeType;
+			// Re-insert to move the entry to the most-recently-used end of the set.
+			this.targetInodeOrder.delete(existingEntry);
+			this.targetInodeOrder.add(existingEntry);
+
+			return;
 		}
 
-		this.targetInodeOrder.set(inodeEventKey, { event, targetPath });
+		const entry: InodeEntry = { event, targetPath, inodeNumber: stats.inodeNumber, inodeType };
+
+		eventInodes.set(targetPath, entry);
+		this.targetInodeOrder.add(entry);
 		this.pruneTrackedInodes();
 	}
 
@@ -157,23 +163,19 @@ export class FileSystemStateManager {
 	 */
 	private pruneTrackedInodes() {
 		while (this.targetInodeOrder.size > FileSystemStateManager.maxTrackedEventInodes) {
-			const oldestKey = this.targetInodeOrder.keys().next().value;
+			const oldestEntry = this.targetInodeOrder.values().next().value;
 
-			if (!oldestKey) { break }
+			if (oldestEntry === undefined) { break }
 
-			const oldestEntry = this.targetInodeOrder.get(oldestKey);
-			this.targetInodeOrder.delete(oldestKey);
+			this.targetInodeOrder.delete(oldestEntry);
 
-			if (!oldestEntry) { continue }
+			const eventInodes = this.targetInodes.get(oldestEntry.event);
 
-			const eventInodes = this.targetInodes[oldestEntry.event];
-			if (!eventInodes) { continue }
+			if (eventInodes === undefined) { continue }
 
-			delete eventInodes[oldestEntry.targetPath];
+			eventInodes.delete(oldestEntry.targetPath);
 
-			if (!Object.keys(eventInodes).length) {
-				delete this.targetInodes[oldestEntry.event];
-			}
+			if (eventInodes.size === 0) { this.targetInodes.delete(oldestEntry.event) }
 		}
 	}
 

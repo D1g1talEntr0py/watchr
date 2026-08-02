@@ -13,7 +13,7 @@ import { setTimeout } from 'node:timers/promises';
 import { Watchr } from '../src/watchr';
 import { FileSystem } from '../src/file-system';
 import { FileSystemEventManager } from '../src/file-system-event-manager';
-import { FileSystemEvent, WatcherEvent } from '../src/constants';
+import { FileSystemEvent, WatcherEvent, debounceWait } from '../src/constants';
 import type { WatchrOptions } from '../src/@types';
 
 vi.mock('node:fs', async () => {

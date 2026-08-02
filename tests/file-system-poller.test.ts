@@ -32,13 +32,13 @@ describe('FileSystemPoller', () => {
     });
 
     it('should return inode number for existing path and event', () => {
-      fileSystemEventManager['targetInodes'][FileSystemEvent.ADD] = { '/path': [123, InodeType.FILE] };
+      fileSystemEventManager['targetInodes'].set(FileSystemEvent.ADD, new Map([['/path', { event: FileSystemEvent.ADD, targetPath: '/path', inodeNumber: 123, inodeType: InodeType.FILE }]]));
       const inodeNumber = fileSystemEventManager.getInodeNumber('/path', FileSystemEvent.ADD);
       expect(inodeNumber).toBe(123);
     });
 
     it('should return undefined if inode type does not match', () => {
-      fileSystemEventManager['targetInodes'][FileSystemEvent.ADD] = { '/path': [123, InodeType.FILE] };
+      fileSystemEventManager['targetInodes'].set(FileSystemEvent.ADD, new Map([['/path', { event: FileSystemEvent.ADD, targetPath: '/path', inodeNumber: 123, inodeType: InodeType.FILE }]]));
       const inodeNumber = fileSystemEventManager.getInodeNumber('/path', FileSystemEvent.ADD, InodeType.DIR);
       expect(inodeNumber).toBeUndefined();
     });
@@ -46,9 +46,9 @@ describe('FileSystemPoller', () => {
 
   describe('reset', () => {
     it('should reset the internal state', () => {
-      fileSystemEventManager['targetInodes'][FileSystemEvent.ADD] = { '/path': [123, InodeType.FILE] };
+      fileSystemEventManager['targetInodes'].set(FileSystemEvent.ADD, new Map([['/path', { event: FileSystemEvent.ADD, targetPath: '/path', inodeNumber: 123, inodeType: InodeType.FILE }]]));
       fileSystemEventManager.reset();
-      expect(fileSystemEventManager['targetInodes']).toEqual({});
+      expect(fileSystemEventManager['targetInodes'].size).toBe(0);
       expect(fileSystemEventManager.paths.size).toBe(0);
       expect(fileSystemEventManager.stats.size).toBe(0);
     });
@@ -175,7 +175,7 @@ describe('FileSystemPoller', () => {
     it('should update inode information', () => {
       const mockStats = new WatchrStats({ isFile: () => true, isDirectory: () => false, isSymbolicLink: () => false, ino: 123n, size: 100n } as any as Stats);
       fileSystemEventManager['updateInode']('/file.txt', FileSystemEvent.ADD, mockStats);
-      expect(fileSystemEventManager?.['targetInodes']?.[FileSystemEvent.ADD]?.['/file.txt']).toEqual([123, InodeType.FILE]);
+      expect(fileSystemEventManager?.['targetInodes']?.get(FileSystemEvent.ADD)?.get('/file.txt')).toEqual({ event: FileSystemEvent.ADD, targetPath: '/file.txt', inodeNumber: 123, inodeType: InodeType.FILE });
     });
 
 		it('should prune the oldest tracked inode event when capacity is exceeded', () => {

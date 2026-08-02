@@ -5,14 +5,12 @@ import type { Resolver } from './@types';
  * Timeouts are respected within the interval margin
  */
 export class LockResolver {
-	private static intervalId?: NodeJS.Timeout;
-	private static readonly interval: number = 50;
-	private static readonly maxResolvers: number = 50000;
-	private static readonly resolvers: Map<Resolver, { timestamp: number, onEvict?: () => void }> = new Map();
-
-	private constructor() {
-		throw new Error('This class cannot be instantiated');
-	}
+	private intervalId?: NodeJS.Timeout;
+	private readonly interval: number = 50;
+	private readonly maxResolvers: number = 50000;
+	/** Earliest known deadline, used to skip full scans on ticks where nothing can be due. */
+	private nextDeadline: number = Infinity;
+	private readonly resolvers: Map<Resolver, { timestamp: number, onEvict?: () => void }> = new Map();
 
 	/**
 	 * Adds a resolver function to be called after a timeout.
@@ -20,71 +18,93 @@ export class LockResolver {
 	 * @param timeout - The timeout duration in milliseconds.
 	 * @param onEvict - Optional callback invoked if the resolver is evicted before it resolves.
 	 */
-	static add(fn: Resolver, timeout: number, onEvict?: () => void): void {
-		if (!LockResolver.resolvers.has(fn) && LockResolver.resolvers.size >= LockResolver.maxResolvers) {
+	add(fn: Resolver, timeout: number, onEvict?: () => void): void {
+		const timestamp = Date.now() + timeout;
+
+		if (!this.resolvers.has(fn) && this.resolvers.size >= this.maxResolvers) {
 			// Keep memory bounded under heavy event pressure by evicting the oldest pending resolver.
-			const oldestResolver = LockResolver.resolvers.keys().next().value;
+			const oldestResolver = this.resolvers.keys().next().value;
 
 			if (oldestResolver !== undefined) {
-				const oldestEntry = LockResolver.resolvers.get(oldestResolver);
-				LockResolver.resolvers.delete(oldestResolver);
+				const oldestEntry = this.resolvers.get(oldestResolver);
+				this.resolvers.delete(oldestResolver);
 				console.warn('🚨 Lock resolver capacity exceeded. Evicting oldest pending resolver.');
 
 				oldestEntry?.onEvict?.();
 			}
 		}
 
-		LockResolver.resolvers.set(fn, {
-			timestamp: Date.now() + timeout,
+		this.resolvers.set(fn, {
+			timestamp,
 			...(onEvict === undefined ? {} : { onEvict }),
 		});
 
-		LockResolver.init();
+		if (timestamp < this.nextDeadline) { this.nextDeadline = timestamp }
+
+		this.init();
 	}
 
 	/**
 	 * Removes a resolver function.
 	 * @param fn - The resolver function to remove.
 	 */
-	static remove(fn: Resolver): void {
-		LockResolver.resolvers.delete(fn);
+	remove(fn: Resolver): void {
+		this.resolvers.delete(fn);
 	}
 
 	/**
 	 * Initializes the lock resolver.
 	 */
-	private static init() {
-		if (LockResolver.intervalId) { return }
+	private init() {
+		if (this.intervalId) { return }
 
-		LockResolver.intervalId = setInterval(LockResolver.resolve, LockResolver.interval);
+		this.intervalId = setInterval(() => this.resolve(), this.interval);
 	}
 
 	/**
 	 * Resets the lock resolver.
 	 */
-	private static reset() {
-		if (!LockResolver.intervalId) { return }
+	reset(): void {
+		this.nextDeadline = Infinity;
+		this.resolvers.clear();
 
-		clearInterval(LockResolver.intervalId);
+		if (!this.intervalId) { return }
 
-		delete LockResolver.intervalId;
+		clearInterval(this.intervalId);
+
+		delete this.intervalId;
 	}
 
 	/**
 	 * Resolves the pending resolver functions.
 	 */
-	private static resolve() {
+	private resolve() {
 		const now = Date.now();
 
-		for (const [ fn, { timestamp } ] of LockResolver.resolvers) {
-			// Continue waiting...
-			if (timestamp > now) { continue }
+		// Nothing can be due yet, so skip the scan entirely.
+		if (now < this.nextDeadline) { return }
 
-			LockResolver.remove(fn);
+		let nextDeadline = Infinity;
+
+		for (const [ fn, { timestamp } ] of this.resolvers) {
+			// Continue waiting...
+			if (timestamp > now) {
+				if (timestamp < nextDeadline) { nextDeadline = timestamp }
+
+				continue;
+			}
+
+			this.remove(fn);
 
 			fn();
 		}
 
-		if (!LockResolver.resolvers.size) { LockResolver.reset() }
+		if (!this.resolvers.size) {
+			this.reset();
+
+			return;
+		}
+
+		this.nextDeadline = nextDeadline;
 	}
 };

@@ -296,6 +296,16 @@ describe('FileSystemEventManager', () => {
 			expect(deduplicatedEvents).toEqual([ [ FileSystemEvent.ADD, 'a' ] ]);
 		});
 
+		it('should collapse repeated same-path events into one informative event', () => {
+			const events: Event[] = [
+				[ FileSystemEvent.ADD, 'a' ],
+				[ FileSystemEvent.UNLINK, 'a' ],
+				[ FileSystemEvent.ADD, 'a' ],
+			];
+			const deduplicatedEvents = (fileSystemEventManager as any).deduplicateEvents(events);
+			expect(deduplicatedEvents).toEqual([ [ FileSystemEvent.ADD, 'a' ] ]);
+		});
+
 		it('should remove identical consecutive events', () => {
 			const events: Event[] = [
 				[ FileSystemEvent.ADD, 'a' ],
@@ -317,6 +327,20 @@ describe('FileSystemEventManager', () => {
 			const nonSubPath = resolve(tmpDir, '../not-sub');
 			expect((fileSystemEventManager as any).isSubRoot(subPath)).toBe(true);
 			expect((fileSystemEventManager as any).isSubRoot(nonSubPath)).toBe(false);
+		});
+	});
+
+	describe('getRenameTimeout()', () => {
+		it('should use configured timeout when path has no rename hint', () => {
+			expect((fileSystemEventManager as any).getRenameTimeout()).toBe(defaultOptions.renameTimeout);
+		});
+
+		it('should use hinted timeout when path was raised by a raw rename event', async () => {
+			const targetPath = resolve(tmpDir, 'file.txt');
+
+			await (fileSystemEventManager as any).onWatcherEvent(NodeTargetEvent.RENAME, targetPath);
+
+			expect((fileSystemEventManager as any).getRenameTimeout()).toBe(5);
 		});
 	});
 

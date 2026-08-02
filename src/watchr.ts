@@ -29,6 +29,7 @@ class Watchr extends EventEmitter implements Closable {
 	private readonly _renameHandler: FileRenameHandler;
 	private readonly roots: Set<Path>;
 	private readonly watchers: Record<Path, WatchrConfig[]>;
+	private readonly lastKnownStats: Map<Path, WatchrStats>;
 	private readonly allEventHandlers = new WeakSet<Handler>();
 	static readonly FileEvent: typeof FileEvent = FileEvent;
 	static readonly DirectoryEvent: typeof DirectoryEvent = DirectoryEvent;
@@ -51,6 +52,7 @@ class Watchr extends EventEmitter implements Closable {
 		this.roots = new Set();
 		this._renameHandler = new FileRenameHandler(this.emitEvent.bind(this), this.error.bind(this));
 		this.watchers = {};
+		this.lastKnownStats = new Map();
 		this._watchersLock = Promise.resolve();
 		this.watchersRestorable = {};
 		this.on(WatcherEvent.CLOSE, () => this.abortController.abort());
@@ -369,13 +371,15 @@ class Watchr extends EventEmitter implements Closable {
 	 */
 	private async watchDirectory(folderPath: Path, options: WatchrOptions, handler?: Handler, filePath?: Path) {
 		if (this.isClosed() || this.isIgnored(folderPath, options.ignore)) { return }
+		const watchOptions = this.toNodeWatchOptions(options);
 
 		// Node.js 20.16+ supports recursive watching natively on all platforms
 		return this.synchronizeWatchers(async () => {
 			if (this.isClosed() || this._abortSignal.aborted) { return }
+			const watcher = watch(folderPath, { ...watchOptions, signal: this._abortSignal }, () => {});
 
 			await this.addWatcher({
-				watcher: watch(folderPath, options),
+				watcher,
 				options,
 				folderPath,
 				...(handler === undefined ? {} : { handler }),
@@ -404,8 +408,23 @@ class Watchr extends EventEmitter implements Closable {
 	 */
 	private async watchFile(filePath: Path, options: WatchrOptions, handler?: Handler) {
 		if (this.isClosed() || this.isIgnored(filePath, options.ignore)) { return }
+		const folderPath = dirname(filePath);
+		const fileWatchOptions = { ...options, recursive: false };
+		const watchOptions = this.toNodeWatchOptions(fileWatchOptions);
 
-		return this.watchDirectory(dirname(filePath), { ...options, recursive: false }, handler, filePath);
+		return this.synchronizeWatchers(async () => {
+			if (this.isClosed() || this._abortSignal.aborted) { return }
+
+			const watcher = watch(filePath, { ...watchOptions, signal: this._abortSignal }, () => {});
+
+			await this.addWatcher({
+				watcher,
+				options: fileWatchOptions,
+				folderPath,
+				...(handler === undefined ? {} : { handler }),
+				filePath,
+			});
+		});
 	}
 
 	/**
@@ -456,7 +475,7 @@ class Watchr extends EventEmitter implements Closable {
 	 * @param handler The handler to call when changes are detected
 	 * @returns A promise that resolves when the watcher is active
 	 */
-	private async watchPath(targetPath: Path, options: WatchrOptions, handler?: Handler) {
+	async watchPath(targetPath: Path, options: WatchrOptions, handler?: Handler): Promise<void> {
 		if (this.isClosed()) { return }
 
 		targetPath = resolve(targetPath);

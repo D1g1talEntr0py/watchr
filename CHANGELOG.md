@@ -1,3 +1,10 @@
+## [1.2.0](https://github.com/D1g1talEntr0py/watchr/compare/v1.1.1...v1.2.0) (2026-08-02)
+* **deps:** update dependencies and lockfile (30f18c1e3cf92e5a553783536048ddfd993c1593)
+* **rename:** prioritize add locks for rename detection (098a10c7c3e0bcaeeada2c06be1692dfb98c7406)
+* add benchmark suites (5a2fe0d47129dd05fb57dee69e504bc7224e5ca6)
+* **event-manager:** optimize event batching and deduplication (e9267f75fa37a43f58e32f868f4fecf2733c9251)
+* **file-system:** use native recursive reading where possible (48f57bbe9600478613e1795c97b973d262ad0617)
+
 ## [1.1.1](https://github.com/D1g1talEntr0py/watchr/compare/v1.1.0...v1.1.1) (2026-06-25)
 
 ### Bug Fixes

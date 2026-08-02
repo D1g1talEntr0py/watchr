@@ -21,7 +21,7 @@
   "engines": {
     "node": ">=22.0.0"
   },
-  "packageManager": "pnpm@11.9.0",
+  "packageManager": "pnpm@11.19.0",
   "publishConfig": {
     "registry": "https://registry.npmjs.org",
     "access": "public"
@@ -48,22 +48,25 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
-    "bench": "vitest bench --run",
-    "bench:watch": "vitest bench --watch"
+    "bench": "node benchmarks/watchr.bench.ts",
+    "bench:compare": "node benchmarks/compare.ts",
+    "bench:compare:json": "node benchmarks/compare.ts --format json"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@types/node": "^26.0.0",
-    "@typescript-eslint/eslint-plugin": "^8.62.0",
-    "@typescript-eslint/parser": "^8.62.0",
-    "@vitest/coverage-v8": "^4.1.9",
+    "@types/node": "^26.1.2",
+    "@typescript-eslint/eslint-plugin": "^8.65.0",
+    "@typescript-eslint/parser": "^8.65.0",
+    "@typescript/native": "npm:typescript@^7.0.2",
+    "@vitest/coverage-v8": "^4.1.10",
     "esbuild": "^0.28.1",
-    "eslint": "^10.5.0",
-    "eslint-plugin-jsdoc": "^63.0.7",
-    "memfs": "^4.57.8",
-    "typescript": "^6.0.3",
-    "typescript-eslint": "^8.62.0",
-    "vitest": "^4.1.9"
+    "eslint": "^10.8.0",
+    "eslint-plugin-jsdoc": "^63.3.2",
+    "memfs": "^4.64.0",
+    "mitata": "^1.0.34",
+    "typescript": "npm:@typescript/typescript6@^6.0.2",
+    "typescript-eslint": "^8.65.0",
+    "vitest": "^4.1.10"
   },
   "keywords": [
     "fs",

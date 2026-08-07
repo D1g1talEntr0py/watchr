@@ -6,25 +6,22 @@ import { mkdtempSync, rmSync, watch } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { setTimeout as delay } from 'node:timers/promises';
-import { Watchr } from '../src/watchr.js';
-import type { WatchrOptions } from '../src/@types/index.js';
-import { renameTimeout } from '../src/constants.js';
+import { Watchr } from '../dist/watchr.js';
+import type { WatchrOptions } from '../src/@types/index';
+import { renameTimeout } from '../dist/constants.js';
 
 const watchrFastOptions: WatchrOptions = {
 	ignoreInitial: true,
-	debounce: 0,
 	renameTimeout: 0,
 };
 
 const watchrRenameOptions: WatchrOptions = {
 	ignoreInitial: true,
-	debounce: 0,
 	renameTimeout,
 };
 
 const watchrRenameRawOptions: WatchrOptions = {
 	ignoreInitial: true,
-	debounce: 0,
 	renameTimeout: 0,
 };
 
@@ -330,12 +327,12 @@ try {
 
 	console.log('\nOverhead Ratios (watchr/native):');
 	console.log(`- cold start + create: ${(coldWatchr / coldNative).toFixed(2)}x (${ms(coldWatchr).toFixed(3)} ms vs ${ms(coldNative).toFixed(3)} ms)`);
-	console.log('- fast profile: debounce=0, renameTimeout=0');
+	console.log('- fast profile: renameTimeout=0');
 	console.log(`- steady create: ${(steadyCreateWatchrAvg / steadyCreateNativeAvg).toFixed(2)}x (${ms(steadyCreateWatchrAvg).toFixed(3)} ms vs ${ms(steadyCreateNativeAvg).toFixed(3)} ms)`);
 	console.log(`- steady change: ${(steadyChangeWatchrAvg / steadyChangeNativeAvg).toFixed(2)}x (${ms(steadyChangeWatchrAvg).toFixed(3)} ms vs ${ms(steadyChangeNativeAvg).toFixed(3)} ms)`);
-	console.log(`- semantic rename profile: debounce=0, renameTimeout=${renameTimeout}`);
+	console.log(`- semantic rename profile: renameTimeout=${renameTimeout}`);
 	console.log(`- steady rename (semantic): ${(steadyRenameWatchrSemanticAvg / steadyRenameNativeAvg).toFixed(2)}x (${ms(steadyRenameWatchrSemanticAvg).toFixed(3)} ms vs ${ms(steadyRenameNativeAvg).toFixed(3)} ms)`);
-	console.log('- raw rename profile: debounce=0, renameTimeout=0');
+	console.log('- raw rename profile: renameTimeout=0');
 	console.log(`- steady rename (raw): ${(steadyRenameWatchrRawAvg / steadyRenameNativeAvg).toFixed(2)}x (${ms(steadyRenameWatchrRawAvg).toFixed(3)} ms vs ${ms(steadyRenameNativeAvg).toFixed(3)} ms)`);
 } finally {
 	steadyCreateNative.close();

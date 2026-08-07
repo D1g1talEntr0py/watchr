@@ -6,11 +6,11 @@ import { mkdtempSync, rmSync, watch } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { setTimeout as delay } from 'node:timers/promises';
-import { FileSystemStateManager } from '../src/file-system-state-manager.js';
-import { LockResolver } from '../src/lock-resolver.js';
-import { WatchrStats } from '../src/watchr-stats.js';
-import { Watchr } from '../src/watchr.js';
-import { FileSystemEvent, renameTimeout } from '../src/constants.js';
+import { FileSystemStateManager } from '../dist/file-system-state-manager.js';
+import { LockResolver } from '../dist/lock-resolver.js';
+import { WatchrStats } from '../dist/watchr-stats.js';
+import { Watchr } from '../dist/watchr.js';
+import { FileSystemEvent, renameTimeout } from '../dist/constants.js';
 import type { Stats, WatchrOptions } from '../src/@types/index.js';
 
 type WatchrBenchEvent = 'add' | 'change' | 'unlink' | 'rename' | 'renameDir';
@@ -29,13 +29,11 @@ const nativeUnlinkDir = join(benchmarkRoot, 'native-unlink');
 
 const benchmarkWatchOptions: WatchrOptions = {
 	ignoreInitial: true,
-	debounce: 0,
 	renameTimeout: 0,
 };
 
 const renameBenchmarkWatchOptions: WatchrOptions = {
 	ignoreInitial: true,
-	debounce: 0,
 	renameTimeout,
 };
 
@@ -220,8 +218,9 @@ type InodeUpdater = { updateInode: (p: string, e: FileSystemEvent, s: WatchrStat
 let stateManager: InodeUpdater | undefined;
 let inodeCounter = 0;
 let lockResolverSeeded = false;
+let lockResolver: LockResolver | undefined;
 
-await group('Native fs.watch Baseline', async () => {
+group('Native fs.watch Baseline', () => {
 	bench('native init and close (50 files)', async () => {
 		const watcher = watch(testFilesDir, () => undefined);
 		await delay(0);
@@ -253,7 +252,7 @@ await group('Native fs.watch Baseline', async () => {
 	});
 });
 
-await group('Watchr Baseline Performance', async () => {
+group('Watchr Baseline Performance', () => {
 	bench('watchr init and close (50 files)', async () => {
 		await withWatchr(testFilesDir, benchmarkWatchOptions, async () => Promise.resolve());
 	});
@@ -335,7 +334,7 @@ await group('Watchr Baseline Performance', async () => {
 	});
 });
 
-await group('Hot Path Microbenchmarks', async () => {
+group('Hot Path Microbenchmarks', () => {
 	bench('updateInode at capacity (triggers prune)', () => {
 		if (stateManager === undefined) {
 			(FileSystemStateManager as unknown as { maxTrackedEventInodes: number }).maxTrackedEventInodes = trackedInodeCapacity;
@@ -351,15 +350,17 @@ await group('Hot Path Microbenchmarks', async () => {
 	});
 
 	bench(`lock resolver idle tick with ${lockResolverCount} pending`, () => {
+		lockResolver ??= new LockResolver();
+
 		if (!lockResolverSeeded) {
 			lockResolverSeeded = true;
 
 			for (let i = 0; i < lockResolverCount; i++) {
-				LockResolver.add(() => undefined, 60_000);
+				lockResolver.add(() => undefined, 60_000);
 			}
 		}
 
-		(LockResolver as unknown as { resolve: () => void }).resolve();
+		(lockResolver as unknown as { resolve: () => void }).resolve();
 	});
 });
 

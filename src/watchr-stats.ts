@@ -32,7 +32,8 @@ export class WatchrStats {
 		this._size = Number(stats.size);
 		this._modifiedTimeNs = typeof stats.mtimeNs === 'bigint' ? stats.mtimeNs : BigInt(stats.mtimeNs ?? 0);
 		this._changeTimeNs = typeof stats.ctimeNs === 'bigint' ? stats.ctimeNs : BigInt(stats.ctimeNs ?? 0);
-		this._modifiedTimeMs = Number(stats.mtimeMs ?? 0);
+		const baseModifiedTimeMs = Number(stats.mtimeMs ?? 0);
+		this._modifiedTimeMs = typeof stats.mtimeNs === 'bigint' ? Number(stats.mtimeNs / 1_000_000n) + Number(stats.mtimeNs % 1_000_000n) / 1_000_000 : baseModifiedTimeMs;
 		this._isFile = stats.isFile();
 		this._isDirectory = stats.isDirectory();
 		this._isSymbolicLink = stats.isSymbolicLink();

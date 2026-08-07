@@ -6,12 +6,11 @@ describe('WatchrStats', () => {
 	const mockStats: Stats = {
 		ino: 123456n,
 		size: 1024n,
-		mtimeMs: 1n,
 		isFile: () => true,
 		isDirectory: () => false,
 		isSymbolicLink: () => false,
 		atimeNs: 0n,
-		mtimeNs: 0n,
+		mtimeNs: 1_000_000n,
 		ctimeNs: 0n,
 		birthtimeNs: 0n,
 		isBlockDevice: () => false,
@@ -75,12 +74,31 @@ describe('WatchrStats', () => {
 			const watchrStats = new WatchrStats(mockStats);
 			expect(watchrStats.modifiedTimeMs).toBe(1);
 		});
+
+		it('should preserve sub-millisecond precision from mtimeNs', () => {
+			const first = new WatchrStats({ ...mockStats, mtimeMs: 1n, mtimeNs: 1_000_100n });
+			const second = new WatchrStats({ ...mockStats, mtimeMs: 1n, mtimeNs: 1_000_900n });
+
+			expect(first.modifiedTimeMs).toBe(1.0001);
+			expect(second.modifiedTimeMs).toBe(1.0009);
+			expect(second.modifiedTimeMs).toBeGreaterThan(first.modifiedTimeMs);
+		});
+
+		it('should not double-count fractional milliseconds already reflected in mtimeMs', () => {
+			const watchrStats = new WatchrStats(({
+				...mockStats,
+				mtimeMs: 1.0009,
+				mtimeNs: 1_000_900n,
+			} as unknown) as Stats);
+
+			expect(watchrStats.modifiedTimeMs).toBe(1.0009);
+		});
 	});
 
 	describe('modifiedTimeNs', () => {
 		it('should return the correct modified time in nanoseconds', () => {
 			const watchrStats = new WatchrStats(mockStats);
-			expect(watchrStats.modifiedTimeNs).toBe(0n);
+			expect(watchrStats.modifiedTimeNs).toBe(1_000_000n);
 		});
 	});
 
@@ -160,4 +178,5 @@ describe('WatchrStats', () => {
 			expect(left.equals(right)).toBe(false);
 		});
 	});
+
 });

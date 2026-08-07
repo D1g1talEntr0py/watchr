@@ -81,7 +81,7 @@ export class FileSystemStateManager {
 			case 8: return [{ type: FileSystemEvent.UNLINK_DIR, stats: previousStats! }];
 			case 10: return [{ type: FileSystemEvent.UNLINK, stats: previousStats! }];
 			// Changes/replacements (11xx) - has old, has new
-			case 15: return [{ type: FileSystemEvent.CHANGE, stats: nextStats! }];
+			case 15: return previousStats!.equals(nextStats!) ? [] : [{ type: FileSystemEvent.CHANGE, stats: nextStats! }];
 			// File to directory (1110)
 			case 14: return [ { type: FileSystemEvent.UNLINK, stats: previousStats! }, { type: FileSystemEvent.ADD_DIR, stats: nextStats! } ];
 			// Directory to file (1101)

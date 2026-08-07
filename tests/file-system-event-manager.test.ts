@@ -12,6 +12,7 @@ import {
 	vi,
 } from 'vitest';
 import { NodeTargetEvent, FileSystemEvent } from '../src/constants';
+import { FileSystemEntries } from '../src/file-system-entries';
 import { FileSystem } from '../src/file-system';
 import { FileSystemEventManager } from '../src/file-system-event-manager';
 import { FileSystemStateManager } from '../src/file-system-state-manager';
@@ -334,6 +335,80 @@ describe('FileSystemEventManager', () => {
 		});
 	});
 
+	describe('empty-name fallback scans', () => {
+		it('should avoid overlapping scans and schedule one trailing rescan', async () => {
+			vi.useFakeTimers();
+
+			const localWatchr = new Watchr();
+			const localPoller = new FileSystemStateManager();
+			const manager = await FileSystemEventManager.newInstance(localPoller, localWatchr, {
+				watcher: watch(tmpDir, defaultOptions),
+				options: defaultOptions,
+				folderPath: tmpDir,
+				nodeHandler: async () => {},
+			});
+
+			const firstScan = Promise.withResolvers<FileSystemEntries>();
+			const secondScan = Promise.withResolvers<FileSystemEntries>();
+			const readDirectorySpy = vi.spyOn(FileSystem, 'readDirectory')
+				.mockImplementationOnce(async () => firstScan.promise)
+				.mockImplementationOnce(async () => secondScan.promise);
+
+			readDirectorySpy.mockClear();
+
+			(manager as any).onWatcherChange(NodeTargetEvent.CHANGE, '');
+			await Promise.resolve();
+
+			expect(readDirectorySpy).toHaveBeenCalledTimes(1);
+
+			(manager as any).onWatcherChange(NodeTargetEvent.CHANGE, '');
+			await Promise.resolve();
+
+			expect(readDirectorySpy).toHaveBeenCalledTimes(1);
+
+			firstScan.resolve(new FileSystemEntries());
+			await Promise.resolve();
+			await Promise.resolve();
+
+			expect(readDirectorySpy).toHaveBeenCalledTimes(1);
+
+			await vi.advanceTimersByTimeAsync((FileSystemEventManager as any).directoryFallbackScanIntervalMs);
+
+			expect(readDirectorySpy).toHaveBeenCalledTimes(2);
+
+			secondScan.resolve(new FileSystemEntries());
+			await Promise.resolve();
+
+			manager.cleanup();
+			localWatchr.close();
+			vi.useRealTimers();
+		});
+
+		it('should not emit fallback events for an ignored root path', async () => {
+			const localWatchr = new Watchr();
+			const localPoller = new FileSystemStateManager();
+			vi.spyOn(localWatchr, 'isIgnored').mockImplementation((path: Path) => path === tmpDir);
+
+			const targetPathCalls: string[] = [];
+			const manager = await FileSystemEventManager.newInstance(localPoller, localWatchr, {
+				watcher: watch(tmpDir, defaultOptions),
+				options: defaultOptions,
+				folderPath: tmpDir,
+				nodeHandler: async (_event, targetPath) => {
+					if (targetPath !== undefined) { targetPathCalls.push(targetPath) }
+				},
+			});
+
+			(manager as any).onWatcherChange(NodeTargetEvent.CHANGE, '');
+			await new Promise((resolve) => setTimeout(resolve, 25));
+
+			expect(targetPathCalls).not.toContain(tmpDir);
+
+			manager.cleanup();
+			localWatchr.close();
+		});
+	});
+
 	describe('isSubRoot()', () => {
 		it('should correctly identify sub roots', () => {
 			const result = (fileSystemEventManager as any).isSubRoot(tmpDir);
@@ -432,6 +507,98 @@ describe('FileSystemEventManager', () => {
 
 			// Should also eventually emit the unlinkDir event
 			expect(events.some(e => e.path === targetPath && e.event === 'unlinkDir')).toBe(true);
+		});
+
+		it('should not close a file-target watcher on UNLINK events', async () => {
+			const filePath = resolve(tmpDir, 'tracked-file.txt');
+			await fs.writeFile(filePath, 'content');
+
+			const localWatchr = new Watchr();
+			const watchersCloseSpy = vi.spyOn(localWatchr, 'watchersClose');
+			const config = {
+				watcher: watch(dirname(filePath), defaultOptions),
+				options: defaultOptions,
+				folderPath: dirname(filePath),
+				filePath,
+			};
+			const manager = await FileSystemEventManager.newInstance(new FileSystemStateManager(), localWatchr, config);
+
+			(manager as any).onTargetEvents([ [ FileSystemEvent.UNLINK, filePath ] ]);
+
+			expect(watchersCloseSpy).not.toHaveBeenCalled();
+			localWatchr.close();
+		});
+
+		it('should not close a file-target watcher on UNLINK_DIR events', async () => {
+			const filePath = resolve(tmpDir, 'tracked-file.txt');
+			await fs.writeFile(filePath, 'content');
+
+			const localWatchr = new Watchr();
+			const watchersCloseSpy = vi.spyOn(localWatchr, 'watchersClose');
+			const config = {
+				watcher: watch(dirname(filePath), defaultOptions),
+				options: defaultOptions,
+				folderPath: dirname(filePath),
+				filePath,
+			};
+			const manager = await FileSystemEventManager.newInstance(new FileSystemStateManager(), localWatchr, config);
+
+			(manager as any).onTargetEvents([ [ FileSystemEvent.UNLINK_DIR, dirname(filePath) ] ]);
+
+			expect(watchersCloseSpy).not.toHaveBeenCalled();
+			localWatchr.close();
+		});
+
+		it('should poll tracked descendants when directory watcher emits an empty filename', async () => {
+			const localWatchr = new Watchr();
+			const localPoller = new FileSystemStateManager();
+			const trackedA = resolve(tmpDir, 'a.ts');
+			const trackedB = resolve(tmpDir, 'b.ts');
+
+			await fs.writeFile(trackedA, 'a');
+			await fs.writeFile(trackedB, 'b');
+
+			await localPoller.update(trackedA);
+			await localPoller.update(trackedB);
+
+			const targetPathCalls: string[] = [];
+			const manager = await FileSystemEventManager.newInstance(localPoller, localWatchr, {
+				watcher: watch(tmpDir, defaultOptions),
+				options: defaultOptions,
+				folderPath: tmpDir,
+				nodeHandler: async (_event, targetPath) => {
+					if (targetPath !== undefined) { targetPathCalls.push(targetPath) }
+				},
+			});
+
+			(manager as any).onWatcherChange(NodeTargetEvent.CHANGE, '');
+			await new Promise((resolve) => setTimeout(resolve, 25));
+
+			expect(targetPathCalls).toContain(trackedA);
+			expect(targetPathCalls).toContain(trackedB);
+			localWatchr.close();
+		});
+
+		it('should use callback filename for non-empty directory watcher events', async () => {
+			const localWatchr = new Watchr();
+			const localPoller = new FileSystemStateManager();
+			const expectedTargetPath = resolve(tmpDir, 'clearly-wrong-filename.ts');
+
+			const targetPathCalls: string[] = [];
+			const manager = await FileSystemEventManager.newInstance(localPoller, localWatchr, {
+				watcher: watch(tmpDir, defaultOptions),
+				options: defaultOptions,
+				folderPath: tmpDir,
+				nodeHandler: async (_event, targetPath) => {
+					if (targetPath !== undefined) { targetPathCalls.push(targetPath) }
+				},
+			});
+
+			(manager as any).onWatcherChange(NodeTargetEvent.CHANGE, 'clearly-wrong-filename.ts');
+			await new Promise((resolve) => setTimeout(resolve, 25));
+
+			expect(targetPathCalls).toContain(expectedTargetPath);
+			localWatchr.close();
 		});
 	});
 

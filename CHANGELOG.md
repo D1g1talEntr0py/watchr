@@ -1,3 +1,16 @@
+## [3.0.0](https://github.com/D1g1talEntr0py/watchr/compare/v2.0.2...v3.0.0) (2026-08-07)
+* **watchr:** drop direct windows support. Sorry, use WSL if you are on Windows (754a78df3a73d1a6642e6cb5c3cbc93fc5a3aa27)
+- enforces a clear platform boundary at startup to fail fast instead of running in partially supported states
+- removes platform-specific fallback branches that masked watcher errors and made behavior harder to reason about
+- simplifies file and watcher path handling so runtime behavior stays consistent across supported environments
+- reduces maintenance risk by deleting dead conditional logic tied to unsupported execution paths
+
+* **platform:** align validation with unix-only support (6fe30faf106e8a89c3ece9a0cd999ac478da2fa6)
+- updates public messaging to set accurate expectations and prevent unsupported usage confusion
+- narrows automation coverage to supported operating systems to reduce noisy failures and false confidence
+- rewrites tests around error sanitization and path behavior to match the new support contract
+- removes test dependencies on platform flags that are no longer part of expected behavior
+
 ## [2.0.2](https://github.com/D1g1talEntr0py/watchr/compare/v2.0.1...v2.0.2) (2026-08-07)
 * **watcher:** adjust file watching behavior for Windows platform (9c2a0d6697156fba14a57e9167492714144641b1)
 

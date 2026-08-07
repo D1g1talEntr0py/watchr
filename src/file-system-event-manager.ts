@@ -91,11 +91,12 @@ export class FileSystemEventManager {
 	}
 
 	/**
-	 * Removes watcher listeners so closed watchers do not retain stale handlers.
+	 * Removes watcher listeners and closes the native watcher so no stale handles remain.
 	 */
 	cleanup(): void {
 		this.watcher.removeListener(NodeWatcherEvent.CHANGE, this.watcherChangeHandler);
 		this.watcher.removeListener(NodeWatcherEvent.ERROR, this.watcherErrorHandler);
+		this.watcher.close();
 	}
 
 	/**

@@ -220,6 +220,15 @@ describe('FileSystemEventManager', () => {
 			expect(watcher.listenerCount('change')).toBe(0);
 			expect(watcher.listenerCount('error')).toBe(0);
 		});
+
+		it('should close the underlying watcher when cleanup is called', () => {
+			const watcher = (fileSystemEventManager as any).watcher;
+			const closeSpy = vi.spyOn(watcher, 'close');
+
+			(fileSystemEventManager as any).cleanup();
+
+			expect(closeSpy).toHaveBeenCalledTimes(1);
+		});
 	});
 
 	describe('populateEvents()', () => {

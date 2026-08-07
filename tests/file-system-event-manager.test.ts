@@ -22,7 +22,9 @@ import type { Event, Path, WatchrOptions } from '../src/@types';
 const tmpDir = resolve(__dirname, '.tmp', 'file-system-event-manager');
 const defaultOptions: WatchrOptions = {
 	persistent: false,
-	recursive: true,
+	// Recursive behavior is not under test in this suite and can trigger
+	// Windows-native fs watcher assertion failures under heavy CI coverage runs.
+	recursive: false,
 	renameTimeout: 100,
 	ignore: (() => false),
 	ignoreInitial: false,

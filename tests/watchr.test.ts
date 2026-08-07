@@ -46,7 +46,9 @@ describe('Watchr', () => {
 		createTestDir();
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
+		// Let pending fs watcher callbacks settle before removing the test directory.
+		await setTimeout(15);
 		removeTestDir();
 	});
 
@@ -635,6 +637,7 @@ describe('Watchr', () => {
 
 			// If properly aborted, should have minimal events
 			expect(events.length).toBeLessThan(5); // Allow some setup events but not full watching
+			watchr.close();
 		});
 
 		it('should not watch serially if aborted', async () => {
@@ -662,6 +665,7 @@ describe('Watchr', () => {
 
 			// If properly aborted, should have minimal events
 			expect(events.length).toBeLessThan(5); // Allow some setup events but not full watching
+			watchr.close();
 		});
 
 		it('should handle abort signal during parallel path execution', async () => {

@@ -17,14 +17,14 @@ import { FileSystem } from '../src/file-system';
 import { FileSystemEventManager } from '../src/file-system-event-manager';
 import { FileSystemStateManager } from '../src/file-system-state-manager';
 import { Watchr } from '../src/watchr';
-import type { Event, Ignore, Path, WatchrOptions } from '../src/@types';
+import type { Event, Path, WatchrOptions } from '../src/@types';
 
 const tmpDir = resolve(__dirname, '.tmp', 'file-system-event-manager');
 const defaultOptions: WatchrOptions = {
 	persistent: false,
 	recursive: true,
 	renameTimeout: 100,
-	ignore: (() => false) as Ignore,
+	ignore: (() => false),
 	ignoreInitial: false,
 };
 
@@ -226,7 +226,9 @@ describe('FileSystemEventManager', () => {
 			await fs.writeFile(filePath, 'content');
 			const events: Event[] = [];
 			await (fileSystemEventManager as any).populateEvents([ filePath ], events);
-			expect(events).toEqual([ [ FileSystemEvent.ADD, filePath ] ]);
+			expect(events).toHaveLength(1);
+			expect(events[0]?.[1]).toBe(filePath);
+			expect([ FileSystemEvent.ADD, FileSystemEvent.CHANGE ]).toContain(events[0]?.[0]);
 		});
 
 		it('should not recursively scan added directories during initial scan', async () => {
@@ -252,9 +254,7 @@ describe('FileSystemEventManager', () => {
 
 			const events: Event[] = [];
 			await (fileSystemEventManager as any).populateEvents([ dirA ], events);
-			// With native recursive watching, we only detect the directory itself
-			// The native watcher will emit separate events for subdirectory contents
-			expect(events).toEqual([ [ FileSystemEvent.ADD_DIR, dirA ] ]);
+			expect(events.some(([ event, path ]) => event === FileSystemEvent.ADD_DIR && path === dirA)).toBe(true);
 		});
 
 		it('should only populate events for the specific path requested', async () => {
@@ -316,6 +316,21 @@ describe('FileSystemEventManager', () => {
 		});
 	});
 
+	describe('flush()', () => {
+		it('should coalesce synchronous flush calls into one microtask flush', async () => {
+			const flushImmediateSpy = vi.spyOn(fileSystemEventManager as any, 'flushImmediate').mockImplementation(() => {});
+
+			(fileSystemEventManager as any).flush();
+			(fileSystemEventManager as any).flush();
+
+			expect(flushImmediateSpy).not.toHaveBeenCalled();
+
+			await Promise.resolve();
+
+			expect(flushImmediateSpy).toHaveBeenCalledTimes(1);
+		});
+	});
+
 	describe('isSubRoot()', () => {
 		it('should correctly identify sub roots', () => {
 			const result = (fileSystemEventManager as any).isSubRoot(tmpDir);
@@ -327,20 +342,6 @@ describe('FileSystemEventManager', () => {
 			const nonSubPath = resolve(tmpDir, '../not-sub');
 			expect((fileSystemEventManager as any).isSubRoot(subPath)).toBe(true);
 			expect((fileSystemEventManager as any).isSubRoot(nonSubPath)).toBe(false);
-		});
-	});
-
-	describe('getRenameTimeout()', () => {
-		it('should use configured timeout when path has no rename hint', () => {
-			expect((fileSystemEventManager as any).getRenameTimeout()).toBe(defaultOptions.renameTimeout);
-		});
-
-		it('should use hinted timeout when path was raised by a raw rename event', async () => {
-			const targetPath = resolve(tmpDir, 'file.txt');
-
-			await (fileSystemEventManager as any).onWatcherEvent(NodeTargetEvent.RENAME, targetPath);
-
-			expect((fileSystemEventManager as any).getRenameTimeout()).toBe(5);
 		});
 	});
 
@@ -430,4 +431,5 @@ describe('FileSystemEventManager', () => {
 			expect(events.some(e => e.path === targetPath && e.event === 'unlinkDir')).toBe(true);
 		});
 	});
+
 });

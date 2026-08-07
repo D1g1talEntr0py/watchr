@@ -79,10 +79,6 @@ Watchr accepts the following options to customize behavior:
   - Default: `'utf8'`
   - Supports any Node.js BufferEncoding
 
-- **`debounce`**: Debounce delay in milliseconds for event emission
-  - Default: `75ms`
-  - Higher values reduce duplicate events but increase latency
-
 - **`ignore`**: Ignore matcher for paths
   - Type: native Node `fs.watch` ignore matcher
   - Callback form: `(filename: string) => boolean`
@@ -93,14 +89,6 @@ Watchr accepts the following options to customize behavior:
 - **`ignoreInitial`**: Skip initial scan events when starting to watch
   - Default: `false`
   - When `true`, only new changes after watching starts will emit events
-
-- **`maxQueue`**: Reserved native queue option for forward compatibility
-  - Default: `undefined`
-  - Currently not applied in direct `fs.watch` mode
-
-- **`overflow`**: Reserved native queue overflow option for forward compatibility
-  - Values: `'ignore' | 'throw'`
-  - Currently not applied in direct `fs.watch` mode
 
 - **`throwIfNoEntry`**: Throw immediately if watched path does not exist
   - Default: Node.js default (`true`)
@@ -174,11 +162,8 @@ type WatchrOptions = {
   persistent?: boolean;
   recursive?: boolean;
   encoding?: BufferEncoding;
-  debounce?: number;
   ignore?: ((filename: string) => boolean) | string | RegExp | Array<string | RegExp | ((filename: string) => boolean)>;
   ignoreInitial?: boolean;
-  maxQueue?: number;
-  overflow?: 'ignore' | 'throw';
   throwIfNoEntry?: boolean;
   renameTimeout?: number;
 };
@@ -285,7 +270,6 @@ const watcher = new Watchr('/path/to/watch', {}, (event, stats, targetPath, targ
 ```typescript
 const watcher = new Watchr('/project', {
   recursive: true,
-  debounce: 200,
   ignoreInitial: true,
   ignore: (path) => {
     // Ignore common development artifacts

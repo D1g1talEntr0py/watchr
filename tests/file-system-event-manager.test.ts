@@ -11,7 +11,6 @@ import {
 	it,
 	vi,
 } from 'vitest';
-import * as constants from '../src/constants';
 import { NodeTargetEvent, FileSystemEvent } from '../src/constants';
 import { FileSystem } from '../src/file-system';
 import { FileSystemEventManager } from '../src/file-system-event-manager';
@@ -186,25 +185,18 @@ describe('FileSystemEventManager', () => {
 			expect(emittedError.message).not.toContain('Test error');
 		});
 
-		it('should handle EPERM error on Windows by triggering a change event', async () => {
-			const isWindowsSpy = vi.spyOn(constants, 'isWindows', 'get').mockReturnValue(true);
-			vi.spyOn(watchr, 'error').mockImplementation(() => true);
-			vi.spyOn(watchr, 'isIgnored').mockReturnValue(false);
-			vi.spyOn(watchr, 'isClosed').mockReturnValue(false);
-
-			// Mock onWatcherEvent to verify it gets called (this is the essential behavior)
-			const onWatcherEventSpy = vi.fn();
-			(fileSystemEventManager as any).onWatcherEvent = onWatcherEventSpy;
-
+		it('should sanitize watcher errors without Windows-specific fallback', () => {
+			const errorSpy = vi.spyOn(watchr, 'error').mockImplementation(() => true);
 			const error = new Error('EPERM') as NodeJS.ErrnoException;
 			error.code = 'EPERM';
+
 			(fileSystemEventManager as any).handleWatchrError(error);
 
-			// On Windows EPERM errors should trigger the change event handling
-			// This is critical for Windows compatibility
-			expect(onWatcherEventSpy).toHaveBeenCalledWith('change', tmpDir);
-
-			isWindowsSpy.mockRestore();
+			expect(errorSpy).toHaveBeenCalledTimes(1);
+			const [ emittedError ] = errorSpy.mock.calls[0] as [NodeJS.ErrnoException];
+			expect(emittedError).toBeInstanceOf(Error);
+			expect(emittedError.message).toBe('🚨 Watcher error (EPERM)');
+			expect(emittedError.code).toBe('EPERM');
 		});
 	});
 

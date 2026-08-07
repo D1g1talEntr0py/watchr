@@ -21,7 +21,7 @@ A modern, TypeScript-first file system watcher built on Node.js native APIs.
 - **Abort Signal Support**: Built-in AbortController integration for clean cancellation
 - **File Statistics**: Includes file stats with all events for enhanced metadata access
 - **Debouncing**: Configurable event debouncing to reduce noise from rapid file changes
-- **Cross-Platform**: Works reliably on macOS?, Windows??, and Linux! (Honestly haven't tested much on Windows and I don't own a Mac. Please report any issues if you find platform-specific bugs)
+- **Supported Platforms**: Linux and macOS only. Windows is not supported.
 - **Zero Native Dependencies**: Pure TypeScript implementation with no native binaries
 
 ## Installation

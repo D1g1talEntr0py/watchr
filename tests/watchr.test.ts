@@ -9,6 +9,7 @@ import {
 	renameSync,
 	unwatchFile,
 } from 'node:fs';
+import type { WatchOptions } from 'node:fs';
 import { setTimeout } from 'node:timers/promises';
 import { Watchr } from '../src/watchr';
 import { FileSystem } from '../src/file-system';
@@ -91,7 +92,7 @@ describe('Watchr', () => {
 			});
 
 			it('should throw for invalid ignore option', () => {
-				expect(() => new Watchr(testDir, { ignore: true as unknown as WatchrOptions['ignore'] })).toThrow('ignore must be a function, string, RegExp, or array of these values');
+				expect(() => new Watchr(testDir, { ignore: true } as unknown as WatchrOptions)).toThrow('ignore must be a function, string, RegExp, or array of these values');
 			});
 
 			it('should accept native ignore patterns', () => {
@@ -132,7 +133,7 @@ describe('Watchr', () => {
 
 				expect(watch).toHaveBeenCalled();
 
-				const firstCallOptions = watch.mock.calls[0]?.[1] as WatchrOptions;
+				const firstCallOptions = watch.mock.calls[0]?.[1] as WatchOptions & { signal?: AbortSignal };
 				expect(firstCallOptions).toBeDefined();
 				expect(firstCallOptions.signal).toBe((watchr as any)._abortSignal);
 
@@ -407,26 +408,36 @@ describe('Watchr', () => {
 			watchr.close();
 		});
 
-			it('should emit an error when a user event handler throws', async () => {
-				const throwingHandler = vi.fn(() => {
-					throw new Error('handler exploded');
-				});
-
-				const watchr = new Watchr(testDir, { ignoreInitial: true }, throwingHandler);
-				await watchr.readyLock;
-
-				const errorPromise = new Promise<Error>((resolve) => {
-					watchr.once(WatcherEvent.ERROR, resolve);
-				});
-
-				createTestFile('handler-throws.txt');
-
-				const error = await errorPromise;
-				expect(error.message).toBe('handler exploded');
-				expect(throwingHandler).toHaveBeenCalled();
-
-				watchr.close();
+		it('should emit an error when a user event handler throws', async () => {
+			const throwingHandler = vi.fn(() => {
+				throw new Error('handler exploded');
 			});
+
+			const watchr = new Watchr(testDir, { ignoreInitial: true, renameTimeout: 0 }, throwingHandler);
+			await watchr.readyLock;
+
+			const errorPromise = new Promise<Error>((resolve, reject) => {
+				const timeoutId = globalThis.setTimeout(() => {
+					watchr.off(WatcherEvent.ERROR, onError);
+					reject(new Error('timed out waiting for thrown handler error'));
+				}, 2000);
+
+				const onError = (error: Error) => {
+					clearTimeout(timeoutId);
+					watchr.off(WatcherEvent.ERROR, onError);
+					resolve(error);
+				};
+
+				watchr.on(WatcherEvent.ERROR, onError);
+			});
+
+			createTestFile('handler-throws.txt');
+			const error = await errorPromise;
+
+			expect(error.message).toBe('handler exploded');
+			expect(throwingHandler).toHaveBeenCalled();
+			watchr.close();
+		});
 	});
 
 	describe('watchFile', () => {

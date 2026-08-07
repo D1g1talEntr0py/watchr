@@ -1,3 +1,36 @@
+## [2.0.0](https://github.com/D1g1talEntr0py/watchr/compare/v1.2.0...v2.0.0) (2026-08-07)
+* **events:** coalesce batch flush and simplify rename timing (2b8062190ed3fb537868e3df9bc85a52f6fdfa1e)
+- Coalesces synchronous flush requests into one microtask to reduce duplicate work.
+- Replaces hint-driven rename timeout adaptation with direct configured behavior.
+- Updates event-manager tests to reflect platform variability and new flush semantics.
+
+* **readiness:** reject lock when closed before ready (2d1df5e699c317416f8a2264ea2f158d06d0e7cf)
+- Rejects readiness waiting when closure happens first to avoid hanging callers.
+- Cleans up event listeners on both success and failure paths.
+- Adds coverage for early-close rejection and end-to-end add-event behavior.
+
+* **benchmarks:** align harness with built runtime (7059745b80980e149c9f7786e24e3315b128e504)
+- Runs benchmark imports against built artifacts for production-relevant measurements.
+- Removes obsolete debounce profile references from benchmark option presets and output labels.
+- Simplifies benchmark grouping flow and uses instance-scoped resolver setup for cleaner hot-path checks.
+
+* **api:** remove debounce and queue options (631a7282107473d62f4b188d1353972cb2486b7b)
+- Removes legacy timing and queue knobs that no longer provide stable value.
+- Shrinks option typing and validation to reduce ambiguous configuration paths.
+- Deletes obsolete helper and decorator logic tied to removed behavior.
+
+* **deps:** update dev dependencies to latest versions (865da69ea6699d6e80d417bbddec64feacd11772)
+- Bump @typescript-eslint/eslint-plugin and @typescript-eslint/parser from 8.65.0 to 8.66.0
+- Update eslint-plugin-jsdoc from 63.3.2 to 63.3.3
+- Upgrade memfs from 4.64.0 to 4.68.0
+- Update jsonjoy packages from 4.64.0 to 4.68.0
+- Bump typescript-eslint from 8.65.0 to 8.66.0
+- Upgrade tinyexec from 1.2.4 to 1.3.0
+
+* **docs:** update README and settings for clarity and consistency (5797e588d98fddc0ae66e8cfa00debffb9de2a98)
+* update esbuild config to disable legacy decorator support and change Vitest pool to threads (991cfa09ea9fe9cd17284ef56c7c7b7a596f78f2)
+* fix windows platform tests (850f565ad4632f4951a23771d3ae49b44b6a002e)
+
 ## [1.2.0](https://github.com/D1g1talEntr0py/watchr/compare/v1.1.1...v1.2.0) (2026-08-02)
 * **deps:** update dependencies and lockfile (30f18c1e3cf92e5a553783536048ddfd993c1593)
 * **rename:** prioritize add locks for rename detection (098a10c7c3e0bcaeeada2c06be1692dfb98c7406)

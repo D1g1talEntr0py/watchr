@@ -25,7 +25,7 @@ export default defineConfig({
 	test: {
 		environment: 'node',
 		globals: false,
-		pool: 'vmForks',
+		pool: 'threads',
 		testTimeout: 10000,
 		typecheck: { enabled: false },
     coverage: {

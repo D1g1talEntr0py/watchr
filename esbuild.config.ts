@@ -61,13 +61,8 @@ await esbuild.build({
 	target: 'esnext',
 	bundle: false,
 	outbase: 'src',
-	tsconfigRaw: {
-		compilerOptions: {
-			experimentalDecorators: true,
-			emitDecoratorMetadata: false,
-		}
-	},
 	plugins: [addJsExtensionPlugin],
+	supported: { decorators: false }
 });
 
 console.log('⚡ Build complete.');

@@ -13,7 +13,7 @@ import { setTimeout } from 'node:timers/promises';
 import { Watchr } from '../src/watchr';
 import { FileSystem } from '../src/file-system';
 import { FileSystemEventManager } from '../src/file-system-event-manager';
-import { FileSystemEvent, WatcherEvent, debounceWait } from '../src/constants';
+import { FileSystemEvent, WatcherEvent } from '../src/constants';
 import type { WatchrOptions } from '../src/@types';
 
 vi.mock('node:fs', async () => {
@@ -74,20 +74,8 @@ describe('Watchr', () => {
 			watchr.close();
 		});
 
-			it('should throw for invalid debounce option', () => {
-				expect(() => new Watchr(testDir, { debounce: -1 })).toThrow('debounce must be a non-negative finite number');
-			});
-
 			it('should throw for invalid renameTimeout option', () => {
 				expect(() => new Watchr(testDir, { renameTimeout: -1 })).toThrow('renameTimeout must be a non-negative finite number');
-			});
-
-			it('should throw for invalid maxQueue option', () => {
-				expect(() => new Watchr(testDir, { maxQueue: 0 })).toThrow('maxQueue must be a positive integer');
-			});
-
-			it('should throw for invalid overflow option', () => {
-				expect(() => new Watchr(testDir, { overflow: 'drop' as unknown as WatchrOptions['overflow'] })).toThrow('overflow must be either "ignore" or "throw"');
 			});
 
 			it('should throw for invalid ignore option', () => {
@@ -112,53 +100,6 @@ describe('Watchr', () => {
 				}).not.toThrow();
 
 				watchr?.close();
-			});
-
-			it('should keep using fs.watch when maxQueue is provided', async () => {
-				watch.mockClear();
-				const watchr = new Watchr(testDir, { maxQueue: 64 });
-				await watchr.readyLock;
-
-				expect(watch).toHaveBeenCalled();
-
-				watchr.close();
-			});
-
-			it('should default debounce to 0 when native queue options are used', async () => {
-				const watchr = new Watchr(testDir, { maxQueue: 64 });
-				await watchr.readyLock;
-
-				expect((watchr as any).watchers[testDir][0].options.debounce).toBe(0);
-
-				watchr.close();
-			});
-
-			it('should keep configured debounce when native queue options are used', async () => {
-				const watchr = new Watchr(testDir, { maxQueue: 64, debounce: 25 });
-				await watchr.readyLock;
-
-				expect((watchr as any).watchers[testDir][0].options.debounce).toBe(25);
-
-				watchr.close();
-			});
-
-			it('should keep classic debounce default without native queue options', async () => {
-				const watchr = new Watchr(testDir);
-				await watchr.readyLock;
-
-				expect((watchr as any).watchers[testDir][0].options.debounce).toBe(debounceWait);
-
-				watchr.close();
-			});
-
-			it('should keep using fs.watch when overflow is provided', async () => {
-				watch.mockClear();
-				const watchr = new Watchr(testDir, { overflow: 'throw' });
-				await watchr.readyLock;
-
-				expect(watch).toHaveBeenCalled();
-
-				watchr.close();
 			});
 
 			it('should keep using fs.watch when queue options are absent', async () => {

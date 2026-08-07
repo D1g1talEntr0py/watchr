@@ -6,7 +6,7 @@ import { FileSystem } from './file-system';
 import { castError, noop, uniqueSortedArray } from './utils';
 import { FileRenameHandler } from './file-rename-handler';
 import { WatchrStats } from './watchr-stats';
-import { FileEvent, DirectoryEvent, WatcherEvent, debounceWait, renameTimeout } from './constants';
+import { FileEvent, DirectoryEvent, WatcherEvent, renameTimeout } from './constants';
 import { FileSystemEventManager } from './file-system-event-manager';
 import type { Handler, WatchIgnore, Path, WatchrOptions, WatchrConfig, AsyncCallable, Closable, FileSystemEvent } from './@types';
 
@@ -602,20 +602,8 @@ class Watchr extends EventEmitter implements Closable {
 			throw new Error('🚨 ignore must be a function, string, RegExp, or array of these values.');
 		}
 
-		if (options.debounce !== undefined && (!Number.isFinite(options.debounce) || options.debounce < 0)) {
-			throw new Error('🚨 debounce must be a non-negative finite number.');
-		}
-
 		if (options.renameTimeout !== undefined && (!Number.isFinite(options.renameTimeout) || options.renameTimeout < 0)) {
 			throw new Error('🚨 renameTimeout must be a non-negative finite number.');
-		}
-
-		if (options.maxQueue !== undefined && (!Number.isInteger(options.maxQueue) || options.maxQueue <= 0)) {
-			throw new Error('🚨 maxQueue must be a positive integer.');
-		}
-
-		if (options.overflow !== undefined && options.overflow !== 'ignore' && options.overflow !== 'throw') {
-			throw new Error('🚨 overflow must be either "ignore" or "throw".');
 		}
 	}
 
@@ -625,11 +613,8 @@ class Watchr extends EventEmitter implements Closable {
 	 * @returns Normalized watch options
 	 */
 	private static normalizeWatchOptions(options: WatchrOptions): WatchrOptions {
-		const usesNativeQueueOptions = options.maxQueue !== undefined || options.overflow !== undefined;
-
 		return {
 			...options,
-			debounce: options.debounce ?? (usesNativeQueueOptions ? 0 : debounceWait),
 			renameTimeout: options.renameTimeout ?? renameTimeout
 		};
 	}

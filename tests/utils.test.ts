@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { castError, debounce, noop } from '../src/utils';
+import { castError, noop } from '../src/utils';
 
 describe('utils', () => {
 	describe('noop', () => {
@@ -9,66 +9,6 @@ describe('utils', () => {
 
 		it('should return undefined', () => {
 			expect(noop()).toBeUndefined();
-		});
-	});
-
-	describe('debounce', () => {
-		it('should debounce function calls, executing only the last one', async () => {
-			const func = vi.fn();
-			const debouncedFunc = debounce(func, 50);
-
-			debouncedFunc();
-			debouncedFunc();
-			debouncedFunc();
-
-			expect(func).not.toHaveBeenCalled();
-
-			await new Promise(resolve => setTimeout(resolve, 100));
-
-			expect(func).toHaveBeenCalledTimes(1);
-		});
-
-		it('should apply the correct `this` context and arguments', async () => {
-			const func = vi.fn(function(this: { foo: string }, a: number, b: string) {
-				expect(this.foo).toBe('bar');
-				return `${this.foo}-${a}-${b}`;
-			});
-			const context = { foo: 'bar' };
-			const debouncedFunc = debounce(func, 50);
-
-			const promise = debouncedFunc.call(context, 1, 'test');
-
-			await new Promise(resolve => setTimeout(resolve, 100));
-
-			expect(func).toHaveBeenCalledWith(1, 'test');
-			await expect(promise).resolves.toBe('bar-1-test');
-		});
-
-		it('should reject the promise if the debounced function throws an error', async () => {
-			const errorMessage = 'test error';
-			const func = () => {
-				throw new Error(errorMessage);
-			};
-			const debouncedFunc = debounce(func, 50);
-
-			await expect(debouncedFunc()).rejects.toThrow(errorMessage);
-		});
-
-		it('should resolve previous pending promises with undefined when a new call is made', async () => {
-			const func = vi.fn();
-			const debouncedFunc = debounce(func, 100);
-
-			const promise1 = debouncedFunc();
-			const promise2 = debouncedFunc();
-
-			const result1 = await promise1;
-			expect(result1).toBeUndefined();
-
-			await new Promise(resolve => setTimeout(resolve, 150));
-			// This will resolve with the function's return value
-			await promise2;
-
-			expect(func).toHaveBeenCalledTimes(1);
 		});
 	});
 

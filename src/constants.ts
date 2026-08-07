@@ -1,6 +1,3 @@
-/** Default debounce wait time in milliseconds */
-const debounceWait = 75;
-
 /** Default rename timeout in milliseconds */
 const renameTimeout = 150;
 
@@ -72,7 +69,6 @@ export {
 	FileSystemEvent,
 	DirectoryEvent,
 	FileEvent,
-	debounceWait,
 	fileDescriptorLimit,
 	isWindows,
 	renameTimeout

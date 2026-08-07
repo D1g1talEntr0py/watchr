@@ -7,26 +7,15 @@ import type { NodeTargetEvent, FileSystemEvent, DirectoryEvent, FileEvent } from
 
 interface Closable { close: Callable };
 
-type Optional<T> = T | undefined | void;
-type OptionalReturn<T extends TypedFunction<T>> = Optional<ReturnType<T>>;
 type Prettify<T> = { [K in keyof T]: T[K] } & {};
 type MergeConstTypes<T, U> = Prettify<{ readonly [K in keyof T & keyof U]: T[K] | U[K] } & Partial<Omit<T, keyof U>> & Partial<Omit<U, keyof T>>>;
 
 type Function<P = any, R = any> = (...args: P[]) => R;
-type AsyncFunction<P = any, R = any> = Function<P, Promise<R>>;
-type InferredFunction<T = Function> = T extends (...args: infer P) => infer R ? (...args: P) => R : never;
-type TypedFunction<T extends (...args: Parameters<T>) => ReturnType<T>> = (...args: Parameters<T>) => ReturnType<T>;
-type AsyncTypedFunction<T extends (...args: Parameters<T>) => Promise<ReturnType<T>>> = (...args: Parameters<T>) => Promise<ReturnType<T>>;
 type Producer<R> = Function<never, R>;
 type Callable = Function<never, void>;
 type AsyncCallable = Function<never, Promise<void>>;
 type Resolver = Function<never, void>;
 type WatchIgnore = Exclude<WatchOptions['ignore'], undefined>;
-
-type MethodDescriptor<T extends TypedFunction<T> = Function> = TypedPropertyDescriptor<T>;
-type AsyncMethodDescriptor<T extends AsyncTypedFunction<T> = AsyncFunction> = TypedPropertyDescriptor<T>;
-type MethodDecorator = <T extends MethodDescriptor>(target: object, propertyKey: PropertyKey, descriptor: T) => T | void;
-type AsyncMethodDecorator = <T extends AsyncMethodDescriptor>(target: object, propertyKey: PropertyKey, descriptor: T) => T | void;
 
 type Event = [ FileSystemEvent, Path, Path? ];
 type TargetEventEmitter = (event: FileSystemEvent, targetPath: Path, targetPathNext?: string) => void;
@@ -67,25 +56,14 @@ type WatchrOptions = {
 	persistent?: boolean;
 	recursive?: boolean;
 	encoding?: BufferEncoding;
-  debounce?: number;
   ignore?: WatchIgnore;
   ignoreInitial?: boolean;
-	maxQueue?: number;
-	overflow?: 'ignore' | 'throw';
 	throwIfNoEntry?: boolean;
 	// TODO: Having a timeout for these sorts of things isn't exactly reliable, but what's the better option?
   renameTimeout?: number;
 };
 
 export type {
-	Optional,
-	OptionalReturn,
-	MethodDescriptor,
-	AsyncMethodDescriptor,
-	MethodDecorator,
-	AsyncMethodDecorator,
-	TypedFunction,
-	InferredFunction,
 	Closable,
 	NodeError,
 	NodeErrorCode,

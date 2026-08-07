@@ -1,3 +1,21 @@
+## [3.0.2](https://github.com/D1g1talEntr0py/watchr/compare/v3.0.1...v3.0.2) (2026-08-07)
+* **poller:** avoids false change events (11fc99b50d47fe115f15be15ce35873f82ad6500)
+- treats identical before/after snapshots as no-op updates instead of changes
+- preserves sub-millisecond modified-time precision from nanosecond metadata
+- updates tests to cover unchanged stats behavior and precision-sensitive equality
+- normalizes mocked stats usage to improve consistency in poller scenarios
+
+* **watcher:** fixes empty-name callback handling (e406bc7963da99c8818a5c8a7ab0e29e86d3a3f4)
+- handles directory callbacks without filenames by polling known targets first
+- schedules a throttled fallback scan and merges queued signals to avoid overlap
+- prevents file-target watchers from closing on unlink-style derived events
+- adds coverage for fallback scheduling, ignored roots, and target resolution paths
+
+* **tests:** improves watcher test reliability (8016b1a27e997e79f42ccabee1dfac4ca7e820a5)
+- aligns mocked watch option typing with native watch option expectations
+- simplifies invalid-ignore test casting to reduce brittle type assumptions
+- hardens thrown-handler error assertions with explicit timeout-backed waits
+
 ## [3.0.1](https://github.com/D1g1talEntr0py/watchr/compare/v3.0.0...v3.0.1) (2026-08-07)
 * watch parent directory for file targets and handle atomic saves (4dd21af343af9fbf35200dac35b0e2f43c623987)
 

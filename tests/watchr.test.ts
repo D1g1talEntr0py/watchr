@@ -13,7 +13,7 @@ import { setTimeout } from 'node:timers/promises';
 import { Watchr } from '../src/watchr';
 import { FileSystem } from '../src/file-system';
 import { FileSystemEventManager } from '../src/file-system-event-manager';
-import { FileSystemEvent, WatcherEvent } from '../src/constants';
+import { FileSystemEvent, WatcherEvent, isWindows } from '../src/constants';
 import type { WatchrOptions } from '../src/@types';
 
 vi.mock('node:fs', async () => {
@@ -432,7 +432,7 @@ describe('Watchr', () => {
 			expect(watch).not.toHaveBeenCalled();
 		});
 
-		it('should watch file targets directly with fs.watch', async () => {
+		it('should watch file targets via their parent directory only on Windows', async () => {
 			const filePath = join(testDir, 'direct-file.txt');
 			createTestFile('direct-file.txt');
 
@@ -441,7 +441,7 @@ describe('Watchr', () => {
 			await watchr.readyLock;
 
 			expect(watch).toHaveBeenCalled();
-			expect(watch.mock.calls[0]?.[0]).toBe(filePath);
+			expect(watch.mock.calls[0]?.[0]).toBe(isWindows ? testDir : filePath);
 
 			watchr.close();
 		});

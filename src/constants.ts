@@ -4,9 +4,6 @@ const renameTimeout = 150;
 /** Default file descriptor limit */
 const fileDescriptorLimit = 2048;
 
-/** Indicates if the current platform is Windows */
-const isWindows: boolean = process.platform === 'win32';
-
 /** Inode types */
 const InodeType = {
 	DIR: 1,
@@ -70,6 +67,5 @@ export {
 	DirectoryEvent,
 	FileEvent,
 	fileDescriptorLimit,
-	isWindows,
 	renameTimeout
 };

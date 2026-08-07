@@ -6,7 +6,7 @@ import { FileSystem } from './file-system';
 import { castError, noop, uniqueSortedArray } from './utils';
 import { FileRenameHandler } from './file-rename-handler';
 import { WatchrStats } from './watchr-stats';
-import { FileEvent, DirectoryEvent, WatcherEvent, renameTimeout, isWindows } from './constants';
+import { FileEvent, DirectoryEvent, WatcherEvent, renameTimeout } from './constants';
 import { FileSystemEventManager } from './file-system-event-manager';
 import type { Handler, WatchIgnore, Path, WatchrOptions, WatchrConfig, AsyncCallable, Closable, FileSystemEvent } from './@types';
 
@@ -42,6 +42,8 @@ class Watchr extends EventEmitter implements Closable {
 	 */
 	constructor(target: Path[] | Path = [], options: WatchrOptions = {}, handler?: Handler) {
 		super();
+		if (process.platform === 'win32') { throw new Error('Windows is not supported directly. Use WSL') }
+
 		Watchr.validateWatchArguments(options, handler);
 		options = Watchr.normalizeWatchOptions(options);
 		this.closed = false;
@@ -434,9 +436,7 @@ class Watchr extends EventEmitter implements Closable {
 		return this.synchronizeWatchers(async () => {
 			if (this.isClosed() || this._abortSignal.aborted) { return }
 
-			// On Windows, Node's fs.watch may assert when initialized against a file path directly.
-			// Keep the original direct-file watcher on other platforms to preserve behavior.
-			const watcher = watch(isWindows ? folderPath : filePath, { ...watchOptions, signal: this._abortSignal }, () => {});
+			const watcher = watch(filePath, { ...watchOptions, signal: this._abortSignal }, () => {});
 
 			await this.addWatcher({
 				watcher,

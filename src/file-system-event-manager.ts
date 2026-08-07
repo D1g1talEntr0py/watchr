@@ -1,7 +1,7 @@
 import { dirname, resolve } from 'node:path';
 import type { FSWatcher } from 'node:fs';
 import { FileSystem } from './file-system';
-import { NodeWatcherEvent, NodeTargetEvent, FileSystemEvent, isWindows } from './constants';
+import { NodeWatcherEvent, NodeTargetEvent, FileSystemEvent } from './constants';
 import type { Watchr } from './watchr';
 import type { FileSystemStateManager } from './file-system-state-manager';
 import type { Event, NodeEventHandler, Path, WatchrOptions, WatchrConfig } from './@types';
@@ -324,15 +324,7 @@ export class FileSystemEventManager {
 	 * @param error The watcher error event to handle
 	 */
 	private handleWatchrError(error: NodeJS.ErrnoException) {
-		if (isWindows && error.code === 'EPERM') {
-			// EPERM can be thrown on Windows when a file is locked by another process.
-			// In this case, we can't do anything but wait for the file to be unlocked.
-			// We can't even stat the file to see if it's a file or a directory.
-			// We'll just emit a change event and let the poller handle it.
-			this.onWatcherChange(NodeTargetEvent.CHANGE);
-		} else {
-			this.watchr.error(this.sanitizeWatcherError(error));
-		}
+		this.watchr.error(this.sanitizeWatcherError(error));
 	}
 
 	/**

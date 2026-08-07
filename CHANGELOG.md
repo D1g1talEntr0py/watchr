@@ -1,3 +1,6 @@
+## [2.0.2](https://github.com/D1g1talEntr0py/watchr/compare/v2.0.1...v2.0.2) (2026-08-07)
+* **watcher:** adjust file watching behavior for Windows platform (9c2a0d6697156fba14a57e9167492714144641b1)
+
 ## [2.0.1](https://github.com/D1g1talEntr0py/watchr/compare/v2.0.0...v2.0.1) (2026-08-07)
 * **watcher:** close native handle during cleanup (94db663b484ce291f5afca9691be9f62c0017524)
 - ensures cleanup releases both listeners and the underlying system handle

@@ -1,3 +1,16 @@
+## [2.0.1](https://github.com/D1g1talEntr0py/watchr/compare/v2.0.0...v2.0.1) (2026-08-07)
+* **watcher:** close native handle during cleanup (94db663b484ce291f5afca9691be9f62c0017524)
+- ensures cleanup releases both listeners and the underlying system handle
+- prevents stale watcher resources from remaining alive after teardown
+- adds verification to guard against regressions in lifecycle management
+
+* **ci:** align matrix with active node versions (c9eb55d6b231b47f4b8828c79e9e235016ecd722)
+- updates automation to run on currently targeted runtime versions
+- keeps coverage upload tied to the designated primary runtime
+- reduces noise from outdated combinations and keeps pipeline signals relevant
+
+* **tests:** disable recursive watching in FileSystemEventManager tests and ensure cleanup after each test (f04a0d1587c966dccbcb3bf67913579016904a5b)
+
 ## [2.0.0](https://github.com/D1g1talEntr0py/watchr/compare/v1.2.0...v2.0.0) (2026-08-07)
 * **events:** coalesce batch flush and simplify rename timing (2b8062190ed3fb537868e3df9bc85a52f6fdfa1e)
 - Coalesces synchronous flush requests into one microtask to reduce duplicate work.

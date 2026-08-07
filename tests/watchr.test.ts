@@ -442,7 +442,7 @@ describe('Watchr', () => {
 			expect(watch).not.toHaveBeenCalled();
 		});
 
-		it('should watch file targets directly', async () => {
+		it('should watch the parent directory for file targets', async () => {
 			const filePath = join(testDir, 'direct-file.txt');
 			createTestFile('direct-file.txt');
 
@@ -451,7 +451,7 @@ describe('Watchr', () => {
 			await watchr.readyLock;
 
 			expect(watch).toHaveBeenCalled();
-			expect(watch.mock.calls[0]?.[0]).toBe(filePath);
+			expect(watch.mock.calls[0]?.[0]).toBe(testDir);
 
 			watchr.close();
 		});
@@ -765,6 +765,45 @@ describe('Watchr', () => {
 			appendFileSync(join(testDir, 'test.txt'), ' more content');
 
 			await eventPromise;
+			watchr.close();
+		});
+
+		it('should emit events for consecutive atomic saves on a watched file path', async () => {
+			createTestFile('atomic.txt', 'initial content');
+			const filePath = join(testDir, 'atomic.txt');
+			const watchr = new Watchr(filePath, { ignoreInitial: true, renameTimeout: 50 });
+			await watchr.readyLock;
+
+			const waitForFileEvent = () => new Promise<void>((resolve, reject) => {
+				const timeoutId = globalThis.setTimeout(() => {
+					watchr.off(WatcherEvent.ALL, onAll);
+					reject(new Error('timed out waiting for event after atomic save'));
+				}, 2000);
+
+				const onAll = (_event: FileSystemEvent, _stats: unknown, targetPath?: string, targetPathNext?: string) => {
+					if (targetPath === filePath || targetPathNext === filePath) {
+						clearTimeout(timeoutId);
+						watchr.off(WatcherEvent.ALL, onAll);
+						resolve();
+					}
+				};
+
+				watchr.on(WatcherEvent.ALL, onAll);
+			});
+
+			const atomicSave = (content: string) => {
+				const tempPath = join(testDir, '.atomic.txt.tmp');
+				writeFileSync(tempPath, content);
+				renameSync(tempPath, filePath);
+			};
+
+			atomicSave('content one');
+			await waitForFileEvent();
+			atomicSave('content two');
+			await waitForFileEvent();
+			atomicSave('content three');
+			await waitForFileEvent();
+
 			watchr.close();
 		});
 

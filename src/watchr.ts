@@ -429,6 +429,7 @@ class Watchr extends EventEmitter implements Closable {
 	 */
 	private async watchFile(filePath: Path, options: WatchrOptions, handler?: Handler) {
 		if (this.isClosed() || this.isIgnored(filePath, options.ignore)) { return }
+
 		const folderPath = dirname(filePath);
 		const fileWatchOptions = { ...options, recursive: false };
 		const watchOptions = this.toNodeWatchOptions(fileWatchOptions);
@@ -436,7 +437,8 @@ class Watchr extends EventEmitter implements Closable {
 		return this.synchronizeWatchers(async () => {
 			if (this.isClosed() || this._abortSignal.aborted) { return }
 
-			const watcher = watch(filePath, { ...watchOptions, signal: this._abortSignal }, () => {});
+			// Watch the parent directory so atomic-save inode replacement keeps emitting events for the target file.
+			const watcher = watch(folderPath, { ...watchOptions, signal: this._abortSignal }, () => {});
 
 			await this.addWatcher({
 				watcher,

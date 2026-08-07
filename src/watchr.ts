@@ -48,7 +48,26 @@ class Watchr extends EventEmitter implements Closable {
 		this.ready = false;
 		this.abortController = new AbortController();
 		this._abortSignal = this.abortController.signal;
-		this._readyLock = new Promise((resolve) => this.on(WatcherEvent.READY, resolve));
+		this._readyLock = new Promise((resolve, reject) => {
+			const cleanup = (): void => {
+				this.off(WatcherEvent.READY, onReady);
+				this.off(WatcherEvent.CLOSE, onClose);
+			};
+
+			const onReady = (): void => {
+				cleanup();
+				resolve();
+			};
+
+			const onClose = (): void => {
+				cleanup();
+				reject(new Error('🚨 watcher closed before becoming ready.'));
+			};
+
+			this.on(WatcherEvent.READY, onReady);
+			this.on(WatcherEvent.CLOSE, onClose);
+		});
+		this._readyLock.catch(noop);
 		this.roots = new Set();
 		this._renameHandler = new FileRenameHandler(this.emitEvent.bind(this), this.error.bind(this));
 		this.watchers = {};

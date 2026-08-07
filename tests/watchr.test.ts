@@ -303,6 +303,13 @@ describe('Watchr', () => {
 			expect(readySpy).not.toHaveBeenCalled();
 			watchr.close();
 		});
+
+		it('should reject readyLock if closed before ready', async () => {
+			const watchr = new Watchr(testDir);
+			watchr.close();
+
+			await expect(watchr.readyLock).rejects.toThrow('watcher closed before becoming ready');
+		});
 	});
 
 	describe('close', () => {

@@ -1,3 +1,6 @@
+## [3.0.1](https://github.com/D1g1talEntr0py/watchr/compare/v3.0.0...v3.0.1) (2026-08-07)
+* watch parent directory for file targets and handle atomic saves (4dd21af343af9fbf35200dac35b0e2f43c623987)
+
 ## [3.0.0](https://github.com/D1g1talEntr0py/watchr/compare/v2.0.2...v3.0.0) (2026-08-07)
 * **watchr:** drop direct windows support. Sorry, use WSL if you are on Windows (754a78df3a73d1a6642e6cb5c3cbc93fc5a3aa27)
 - enforces a clear platform boundary at startup to fail fast instead of running in partially supported states

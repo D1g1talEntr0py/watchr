@@ -246,7 +246,7 @@ export class FileSystemEventManager {
 			[ FileSystemEvent.RENAME, 2 ],
 			[ FileSystemEvent.RENAME_DIR, 2 ],
 			[ FileSystemEvent.UNLINK, 1 ],
-			[ FileSystemEvent.UNLINK_DIR, 1 ],
+			[ FileSystemEvent.UNLINK_DIR, 1 ]
 		]);
 		const uniqueEvents: Event[] = [];
 		const eventIndexes = new Map<Path, number>();

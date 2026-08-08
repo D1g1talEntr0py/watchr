@@ -48,10 +48,7 @@ export class LockResolver {
 			}
 		}
 
-		this.resolvers.set(fn, {
-			timestamp,
-			...(onEvict === undefined ? {} : { onEvict }),
-		});
+		this.resolvers.set(fn, { timestamp, ...(onEvict === undefined ? {} : { onEvict }) });
 
 		if (timestamp < this.nextDeadline) { this.nextDeadline = timestamp }
 

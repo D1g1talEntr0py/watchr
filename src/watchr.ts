@@ -319,7 +319,7 @@ class Watchr extends EventEmitter implements Closable {
 			atime: new Date(nowMs),
 			mtime: new Date(nowMs),
 			ctime: new Date(nowMs),
-			birthtime: new Date(nowMs),
+			birthtime: new Date(nowMs)
 		};
 
 		return new WatchrStats(fallbackStats);
@@ -405,7 +405,7 @@ class Watchr extends EventEmitter implements Closable {
 				options,
 				folderPath,
 				...(handler === undefined ? {} : { handler }),
-				...(filePath === undefined ? {} : { filePath }),
+				...(filePath === undefined ? {} : { filePath })
 			});
 		});
 	}
@@ -446,7 +446,7 @@ class Watchr extends EventEmitter implements Closable {
 				options: fileWatchOptions,
 				folderPath,
 				...(handler === undefined ? {} : { handler }),
-				filePath,
+				filePath
 			});
 		});
 	}
@@ -601,20 +601,10 @@ class Watchr extends EventEmitter implements Closable {
 			...(options.persistent === undefined ? {} : { persistent: options.persistent }),
 			...(options.recursive === undefined ? {} : { recursive: options.recursive }),
 			...(options.encoding === undefined ? {} : { encoding: options.encoding }),
-			...(options.throwIfNoEntry === undefined ? {} : { throwIfNoEntry: options.throwIfNoEntry }),
+			...(options.throwIfNoEntry === undefined ? {} : { throwIfNoEntry: options.throwIfNoEntry })
 		};
 
-		if (typeof ignore !== 'function') {
-			return {
-				...watchOptions,
-				...(ignore === undefined ? {} : { ignore }),
-			};
-		}
-
-		return {
-			...watchOptions,
-			ignore,
-		};
+		return typeof ignore !== 'function' ? { ...watchOptions, ...(ignore === undefined ? {} : { ignore }) } : { ...watchOptions, ignore };
 	}
 
 	/**
@@ -642,10 +632,7 @@ class Watchr extends EventEmitter implements Closable {
 	 * @returns Normalized watch options
 	 */
 	private static normalizeWatchOptions(options: WatchrOptions): WatchrOptions {
-		return {
-			...options,
-			renameTimeout: options.renameTimeout ?? renameTimeout
-		};
+		return { ...options, renameTimeout: options.renameTimeout ?? renameTimeout };
 	}
 
 	/**
@@ -654,9 +641,7 @@ class Watchr extends EventEmitter implements Closable {
 	 * @returns True if the ignore option is valid.
 	 */
 	private static isValidIgnoreOption(ignore: WatchIgnore): boolean {
-		if (typeof ignore === 'function' || typeof ignore === 'string' || ignore instanceof RegExp) {
-			return true;
-		}
+		if (typeof ignore === 'function' || typeof ignore === 'string' || ignore instanceof RegExp) { return true }
 
 		if (!Array.isArray(ignore)) { return false }
 

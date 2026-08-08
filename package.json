@@ -50,7 +50,8 @@
     "test:watch": "vitest",
     "bench": "pnpm build && node benchmarks/watchr.bench.ts",
     "bench:compare": "pnpm build && node benchmarks/compare.ts",
-    "bench:compare:json": "pnpm build && node benchmarks/compare.ts --format json"
+    "bench:compare:json": "pnpm build && node benchmarks/compare.ts --format json",
+    "bench:diagnostics": "pnpm build && node --expose-gc benchmarks/diagnostics.bench.ts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

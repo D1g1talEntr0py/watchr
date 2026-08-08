@@ -463,22 +463,27 @@ class Watchr extends EventEmitter implements Closable {
 
 		if (targetPaths.length === 1) { return this.watchPath(targetPaths[0]!, options, handler) }
 
-		// Sort and deduplicate the paths
-		targetPaths = uniqueSortedArray(targetPaths);
+		// Resolve, sort, and deduplicate once so ancestor checks use canonical paths.
+		targetPaths = uniqueSortedArray(targetPaths.map((targetPath) => resolve(targetPath)));
 
 		// NOTE: Parallelization at the directory traversal level (readDirectory) has been implemented to improve latency.
 		// This method watches paths serially when subpaths are detected to prevent duplicate watchers on the same folder.
 		// For independent paths, parallelization via Promise.all() is used below.
-		let hasSubPaths = false;
 		const length = targetPaths.length;
-		outer: for (let i = 0; i < length; i++) {
-			for (let j = i + 1; j < length; j++) {
-				if (FileSystem.isSubPath(targetPaths[i]!, targetPaths[j]!)) {
-					hasSubPaths = true;
-					break outer;
-				}
+		const targetPathSet = new Set(targetPaths);
+		const hasSubPaths = targetPaths.some((targetPath) => {
+			let currentPath = targetPath;
+			let parentPath = dirname(currentPath);
+
+			while (parentPath !== currentPath) {
+				if (targetPathSet.has(parentPath)) { return true }
+
+				currentPath = parentPath;
+				parentPath = dirname(currentPath);
 			}
-		}
+
+			return false;
+		});
 
 		if (hasSubPaths) {
 			// Watching serially

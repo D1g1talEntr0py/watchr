@@ -130,6 +130,49 @@ describe('FileRenameHandler', () => {
       expect(resolverSpy).not.toHaveBeenCalled();
     });
 
+    it('should not emit RENAME for UNLINK when the sibling path already received a direct CHANGE this batch', () => {
+      const tempPath: Path = '/path/to/.file.tmp';
+      const targetPath: Path = '/path/to/file';
+      const inodeNumber = 789;
+
+      vi.spyOn(fileSystemPoller, 'getInodeNumber').mockReturnValue(inodeNumber);
+      vi.spyOn(fileSystemPoller.paths, 'find').mockReturnValue(targetPath);
+
+      fileRenameHandler.getLockTargetEvent(FileSystemEvent.UNLINK, tempPath, 0, new Set([ targetPath ]));
+
+      expect(emitEvent).not.toHaveBeenCalledWith(FileSystemEvent.RENAME, tempPath, targetPath);
+      expect(emitEvent).toHaveBeenCalledWith(FileSystemEvent.UNLINK, tempPath);
+    });
+
+  it('should not emit RENAME for UNLINK when changedPaths contains a non-canonical sibling path', () => {
+    const tempPath: Path = '/path/to/.file.tmp';
+    const targetPath: Path = '/path/to/file';
+    const nonCanonicalTargetPath: Path = '/path/to/sub/../file';
+    const inodeNumber = 789;
+
+    vi.spyOn(fileSystemPoller, 'getInodeNumber').mockReturnValue(inodeNumber);
+    vi.spyOn(fileSystemPoller.paths, 'find').mockReturnValue(targetPath);
+
+    fileRenameHandler.getLockTargetEvent(FileSystemEvent.UNLINK, tempPath, 0, new Set([ nonCanonicalTargetPath ]));
+
+    expect(emitEvent).not.toHaveBeenCalledWith(FileSystemEvent.RENAME, tempPath, targetPath);
+    expect(emitEvent).toHaveBeenCalledWith(FileSystemEvent.UNLINK, tempPath);
+  });
+
+    it('should not emit RENAME for ADD when the sibling inode path already received a direct CHANGE this batch', () => {
+      const originalPath: Path = '/path/to/file';
+      const tempPath: Path = '/path/to/.file.tmp';
+      const inodeNumber = 987;
+
+      vi.spyOn(fileSystemPoller, 'getInodeNumber').mockReturnValue(inodeNumber);
+      vi.spyOn(fileSystemPoller.paths, 'find').mockReturnValue(originalPath);
+
+      fileRenameHandler.getLockTargetEvent(FileSystemEvent.ADD, tempPath, 0, new Set([ originalPath ]));
+
+      expect(emitEvent).not.toHaveBeenCalledWith(FileSystemEvent.RENAME, originalPath, tempPath);
+      expect(emitEvent).toHaveBeenCalledWith(FileSystemEvent.ADD, tempPath);
+    });
+
     it('should emit a RENAME event when a file is moved', () => {
 			vi.useFakeTimers();
 			const originalPath: Path = '/path/to/file';

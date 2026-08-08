@@ -297,6 +297,16 @@ export class FileSystemEventManager {
 	 * @param events The target events to handle
 	 */
 	private onTargetEvents(events: Event[]) {
+		// Same-path stat transitions (e.g. atomic-save inode swaps) already resolve as a single CHANGE;
+		// exclude those paths from rename-sibling correlation so a co-batched temp-file unlink/add doesn't
+		// also emit a redundant RENAME for the same target. Collect the full set first, then process the
+		// original batch in order so event emission and watcher cleanup retain their observed ordering.
+		const changedPaths = new Set<Path>();
+
+		for (const [ targetEvent, targetPath ] of events) {
+			if (targetEvent === FileSystemEvent.CHANGE) { changedPaths.add(targetPath) }
+		}
+
 		for (const [ targetEvent, targetPath ] of events) {
 			if (targetEvent === FileSystemEvent.UNLINK && this.filePath === undefined) {
 				this.watchr.watchersClose(dirname(targetPath), targetPath);
@@ -306,10 +316,10 @@ export class FileSystemEventManager {
 			}
 
 			if (this.isSubRoot(targetPath)) {
-				if (targetEvent !== FileSystemEvent.CHANGE) {
-					this.watchr.renameWatchr.getLockTargetEvent(targetEvent, targetPath, this.options.renameTimeout);
-				} else {
+				if (targetEvent === FileSystemEvent.CHANGE) {
 					this.watchr.emitEvent(targetEvent, targetPath);
+				} else {
+					this.watchr.renameWatchr.getLockTargetEvent(targetEvent, targetPath, this.options.renameTimeout, changedPaths);
 				}
 			}
 		}

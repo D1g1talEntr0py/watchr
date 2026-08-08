@@ -1,3 +1,4 @@
+import { resolve } from 'node:path';
 import { LockResolver } from './lock-resolver';
 import { InodeType, FileSystemEvent, renameTimeout, DirectoryEvent, FileEvent } from './constants';
 import { FileSystemLocker } from './file-system-locker';
@@ -39,14 +40,15 @@ export class FileRenameHandler {
 	 * @param event - The file system event.
 	 * @param targetPath - The target path of the event.
 	 * @param timeout - The timeout duration in milliseconds.
+	 * @param changedPaths - Paths that already received a direct CHANGE in the same batch, excluded from rename-sibling correlation.
 	 * @returns void
 	 */
-	getLockTargetEvent(event: FileSystemEvent, targetPath: Path, timeout?: number): void {
+	getLockTargetEvent(event: FileSystemEvent, targetPath: Path, timeout?: number, changedPaths?: ReadonlySet<Path>): void {
 		switch (event) {
-			case FileSystemEvent.ADD: return this.processLock(targetPath, event, InodeType.FILE, 'add', timeout);
-			case FileSystemEvent.ADD_DIR: return this.processLock(targetPath, event, InodeType.DIR, 'add', timeout);
-			case FileSystemEvent.UNLINK: return this.processLock(targetPath, event, InodeType.FILE, 'unlink', timeout);
-			case FileSystemEvent.UNLINK_DIR: return this.processLock(targetPath, event, InodeType.DIR, 'unlink', timeout);
+			case FileSystemEvent.ADD: return this.processLock(targetPath, event, InodeType.FILE, 'add', timeout, changedPaths);
+			case FileSystemEvent.ADD_DIR: return this.processLock(targetPath, event, InodeType.DIR, 'add', timeout, changedPaths);
+			case FileSystemEvent.UNLINK: return this.processLock(targetPath, event, InodeType.FILE, 'unlink', timeout, changedPaths);
+			case FileSystemEvent.UNLINK_DIR: return this.processLock(targetPath, event, InodeType.DIR, 'unlink', timeout, changedPaths);
 		}
 	}
 
@@ -57,20 +59,21 @@ export class FileRenameHandler {
 	 * @param inodeType - The inode type (file or directory).
 	 * @param operation - Whether this is an 'add' or 'unlink' operation.
 	 * @param timeout - The timeout duration in milliseconds.
+	 * @param changedPaths - Paths that already received a direct CHANGE in the same batch, excluded from rename-sibling correlation.
 	 */
-	private processLock(targetPath: Path, event: FileSystemEvent, inodeType: InodeType, operation: 'add' | 'unlink', timeout?: number) {
+	private processLock(targetPath: Path, event: FileSystemEvent, inodeType: InodeType, operation: 'add' | 'unlink', timeout?: number, changedPaths?: ReadonlySet<Path>) {
 		const inodeNumber = this.fileSystemStateManager.getInodeNumber(targetPath, event, inodeType);
 		const lockConfig = {
 			targetPath,
 			lockEvent: inodeType === InodeType.FILE ? FileEvent : DirectoryEvent,
 			fileSystemLocker: inodeType === InodeType.FILE ? this.fileLocks : this.directoryLocks,
-			...(inodeNumber === undefined ? {} : { inodeNumber }),
+			...(inodeNumber === undefined ? {} : { inodeNumber })
 		};
 
 		if (operation === 'add') {
-			this.addLock(lockConfig, timeout);
+			this.addLock(lockConfig, timeout, changedPaths);
 		} else {
-			this.unlinkLock(lockConfig, timeout);
+			this.unlinkLock(lockConfig, timeout, changedPaths);
 		}
 	}
 
@@ -88,13 +91,14 @@ export class FileRenameHandler {
 	 * Adds a lock.
 	 * @param lockConfig - The lock configuration.
 	 * @param timeout - The timeout duration in milliseconds.
+	 * @param changedPaths - Paths that already received a direct CHANGE in the same batch, excluded from rename-sibling correlation.
 	 * @returns void
 	 */
-	private addLock({ inodeNumber, targetPath, lockEvent, fileSystemLocker }: LockConfig, timeout: number = renameTimeout) {
+	private addLock({ inodeNumber, targetPath, lockEvent, fileSystemLocker }: LockConfig, timeout: number = renameTimeout, changedPaths?: ReadonlySet<Path>) {
 		if (inodeNumber !== undefined) {
 			const previousTargetPath = this.findSiblingPath(inodeNumber, targetPath);
 
-			if (previousTargetPath !== undefined) {
+			if (previousTargetPath !== undefined && !this.hasChangedPath(changedPaths, previousTargetPath)) {
 				this.emitEvent(lockEvent.rename, previousTargetPath, targetPath);
 				return;
 			}
@@ -107,7 +111,7 @@ export class FileRenameHandler {
 			// Maybe this is actually a rename in a case-insensitive filesystem
 			const otherPath = inodeNumber !== undefined ? this.findSiblingPath(inodeNumber, targetPath) : undefined;
 
-			if (otherPath) {
+			if (otherPath && !this.hasChangedPath(changedPaths, otherPath)) {
 				this.emitEvent(lockEvent.rename, otherPath, targetPath);
 			} else {
 				this.emitEvent(lockEvent.add, targetPath);
@@ -187,14 +191,15 @@ export class FileRenameHandler {
 	 * Adds a lock.
 	 * @param lockConfig - The lock configuration.
 	 * @param timeout - The timeout duration in milliseconds.
+	 * @param changedPaths - Paths that already received a direct CHANGE in the same batch, excluded from rename-sibling correlation.
 	 * @returns void
 	 */
-	private unlinkLock({ inodeNumber, targetPath, lockEvent, fileSystemLocker }: LockConfig, timeout: number = renameTimeout) {
+	private unlinkLock({ inodeNumber, targetPath, lockEvent, fileSystemLocker }: LockConfig, timeout: number = renameTimeout, changedPaths?: ReadonlySet<Path>) {
 		if (!inodeNumber) { return this.emitEvent(lockEvent.unlink, targetPath) }
 
 		const nextTargetPath = this.findSiblingPath(inodeNumber, targetPath);
 
-		if (nextTargetPath !== undefined) {
+		if (nextTargetPath !== undefined && !this.hasChangedPath(changedPaths, nextTargetPath)) {
 			this.emitEvent(lockEvent.rename, targetPath, nextTargetPath);
 			return;
 		}
@@ -246,5 +251,25 @@ export class FileRenameHandler {
 	 */
 	private findSiblingPath(inodeNumber: number | bigint, targetPath: Path): Path | undefined {
 		return this.fileSystemStateManager.paths.find(inodeNumber, (path) => path !== targetPath);
+	}
+
+	/**
+	 * Checks whether a path is present in changed-paths using canonical path matching.
+	 * @param changedPaths - Paths that already emitted a direct CHANGE in the current batch.
+	 * @param targetPath - Path to check.
+	 * @returns True when the path is represented in the changed set.
+	 */
+	private hasChangedPath(changedPaths: ReadonlySet<Path> | undefined, targetPath: Path): boolean {
+		if (changedPaths === undefined) { return false }
+
+		if (changedPaths.has(targetPath)) { return true }
+
+		const canonicalTargetPath = resolve(targetPath);
+
+		for (const changedPath of changedPaths) {
+			if (resolve(changedPath) === canonicalTargetPath) { return true }
+		}
+
+		return false;
 	}
 }

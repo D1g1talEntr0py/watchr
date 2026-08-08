@@ -293,17 +293,17 @@ describe('FileRenameHandler', () => {
 
   describe('lock overflow handling', () => {
     it('should emit a safe error when lock resolver capacity is exceeded', () => {
-      const originalMaxResolvers = (fileRenameHandler['lockResolver'] as any).maxResolvers;
-      (fileRenameHandler['lockResolver'] as any).maxResolvers = 1;
+      const addSpy = vi.spyOn(LockResolver.prototype, 'add').mockImplementation((_fn, _timeout, onEvict) => {
+        onEvict?.();
+      });
 
       vi.spyOn(fileSystemPoller, 'getInodeNumber').mockReturnValue(123);
 
       fileRenameHandler.getLockTargetEvent(FileSystemEvent.UNLINK, '/old-file');
-      fileRenameHandler.getLockTargetEvent(FileSystemEvent.UNLINK, '/new-file');
 
       expect(emitError).toHaveBeenCalledWith(expect.objectContaining({ message: '🚨 Lock resolver capacity exceeded.' }));
 
-      (fileRenameHandler['lockResolver'] as any).maxResolvers = originalMaxResolvers;
+			addSpy.mockRestore();
     });
   });
 });

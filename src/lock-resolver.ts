@@ -1,16 +1,30 @@
 import type { Resolver } from './@types';
 
+type LockResolverOptions = {
+	interval?: number,
+	maxResolvers?: number
+};
+
 /**
  * Registering a single interval scales much better than registering N timeouts
  * Timeouts are respected within the interval margin
  */
 export class LockResolver {
 	private intervalId?: NodeJS.Timeout;
-	private readonly interval: number = 50;
-	private readonly maxResolvers: number = 50000;
+	private readonly interval: number;
+	private readonly maxResolvers: number;
 	/** Earliest known deadline, used to skip full scans on ticks where nothing can be due. */
 	private nextDeadline: number = Infinity;
 	private readonly resolvers: Map<Resolver, { timestamp: number, onEvict?: () => void }> = new Map();
+
+	/**
+	 * Creates a lock resolver.
+	 * @param options - Optional timing and capacity overrides.
+	 */
+	constructor(options: LockResolverOptions = {}) {
+		this.interval = options.interval ?? 50;
+		this.maxResolvers = options.maxResolvers ?? 50000;
+	}
 
 	/**
 	 * Adds a resolver function to be called after a timeout.
@@ -19,7 +33,7 @@ export class LockResolver {
 	 * @param onEvict - Optional callback invoked if the resolver is evicted before it resolves.
 	 */
 	add(fn: Resolver, timeout: number, onEvict?: () => void): void {
-		const timestamp = Date.now() + timeout;
+		const timestamp = performance.now() + timeout;
 
 		if (!this.resolvers.has(fn) && this.resolvers.size >= this.maxResolvers) {
 			// Keep memory bounded under heavy event pressure by evicting the oldest pending resolver.
@@ -79,7 +93,7 @@ export class LockResolver {
 	 * Resolves the pending resolver functions.
 	 */
 	private resolve() {
-		const now = Date.now();
+		const now = performance.now();
 
 		// Nothing can be due yet, so skip the scan entirely.
 		if (now < this.nextDeadline) { return }

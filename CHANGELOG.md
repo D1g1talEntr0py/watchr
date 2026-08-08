@@ -1,3 +1,39 @@
+## [3.1.0](https://github.com/D1g1talEntr0py/watchr/compare/v3.0.2...v3.1.0) (2026-08-08)
+* **bench:** add diagnostics benchmark workflow (eaa689b8627e8ec82673472e7011dde4a0c4a5d3)
+- introduces targeted diagnostics to compare startup, fallback scanning, and stat overhead
+- adds a dedicated runnable benchmark entry for repeatable profiling
+- improves visibility into bottlenecks behind watcher responsiveness
+
+* **cache:** keep stats state consistent across renames (176faef0e1afff879a2cfd638b740f74bbc78d01)
+- removes stale source-path metadata when rename events provide a destination
+- keeps destination metadata current to avoid drift after repeated renames
+- clears cached stats during shutdown to prevent stale reuse after close
+
+* **events:** avoid false rename emission on changed paths (34112245bf7ae3d99fc3853cbb9b303db28ec5c8)
+- prevents duplicate rename signals when same-path transitions already resolve as direct changes
+- preserves event order while reducing noisy and misleading rename correlations
+- treats path comparisons canonically so equivalent paths are handled consistently
+
+* **lock-resolver:** use monotonic timing and tunable caps (88db2cd4ed59974f8937dd632a7f7ac1caa32d5e)
+- improves timeout accuracy by switching to monotonic timing
+- allows interval and capacity tuning for high-load environments
+- hardens overflow behavior checks with explicit eviction-path tests
+
+* **watcher:** canonicalize roots and speed subpath checks (8f048220abf80d0e762f2ef5376696f8ae3f4023)
+- normalizes target paths before deduplication to avoid duplicate work
+- replaces quadratic pairwise checks with ancestor-set lookups
+- reduces watcher setup overhead for large multi-path inputs
+
+* **style:** enforce no dangling commas (dae82b691257eece59c01c7b3de67e5aebd9f8e0)
+- standardizes formatting to match stricter lint expectations
+- simplifies several small option-building branches for readability
+- keeps behavior unchanged while reducing style-only diff churn
+
+* **tests:** align suites with public behavior (05a4120224ffa3147d8600a1a407ed220a11e085)
+- reduces brittle private-state assertions and internal coupling
+- updates coverage to validate externally observable contracts
+- streamlines large suites for faster maintenance and clearer intent
+
 ## [3.0.2](https://github.com/D1g1talEntr0py/watchr/compare/v3.0.1...v3.0.2) (2026-08-07)
 * **poller:** avoids false change events (11fc99b50d47fe115f15be15ce35873f82ad6500)
 - treats identical before/after snapshots as no-op updates instead of changes

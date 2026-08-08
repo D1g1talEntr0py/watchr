@@ -203,6 +203,7 @@ class Watchr extends EventEmitter implements Closable {
 	close(): void {
 		this._renameHandler.reset();
 		this.roots.clear();
+		this.lastKnownStats.clear();
 		this.watchersClose();
 
 		// Clear watcher restoration timeout and restorable watchers
@@ -244,13 +245,13 @@ class Watchr extends EventEmitter implements Closable {
 
 		const targetStats = this.resolveEventStats(targetPath, targetPathNext);
 
-		if (event === 'unlink' || event === 'unlinkDir') {
+		if (targetPathNext !== undefined) {
+			this.lastKnownStats.delete(targetPath);
+			this.lastKnownStats.set(targetPathNext, targetStats);
+		} else if (event === 'unlink' || event === 'unlinkDir') {
 			this.lastKnownStats.delete(targetPath);
 		} else {
 			this.lastKnownStats.set(targetPath, targetStats);
-			if (targetPathNext) {
-				this.lastKnownStats.set(targetPathNext, targetStats);
-			}
 		}
 
 		this.emit(WatcherEvent.ALL, event, targetStats, targetPath, targetPathNext);

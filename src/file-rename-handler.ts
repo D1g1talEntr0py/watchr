@@ -3,7 +3,7 @@ import { LockResolver } from './lock-resolver';
 import { InodeType, FileSystemEvent, renameTimeout, DirectoryEvent, FileEvent } from './constants';
 import { FileSystemLocker } from './file-system-locker';
 import { FileSystemStateManager } from './file-system-state-manager';
-import type { Path, LockConfig, TargetEventEmitter } from './@types';
+import type { Path, LockConfig, TargetEventEmitter } from './@types/index';
 
 /** Handles file rename events */
 export class FileRenameHandler {

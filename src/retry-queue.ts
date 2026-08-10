@@ -1,4 +1,4 @@
-import type { Resolver } from './@types';
+import type { Resolver } from './@types/index';
 import { fileDescriptorLimit } from './constants';
 
 /** A class that manages a retry queue for handling tasks that need to be retried */

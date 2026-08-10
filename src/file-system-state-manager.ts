@@ -2,7 +2,7 @@ import { SetMultiMap } from './set-multi-map';
 import { FileSystem } from './file-system';
 import { WatchrStats } from './watchr-stats';
 import { FileSystemEvent, InodeType } from './constants';
-import type { InodeNumber, Path } from './@types';
+import type { InodeNumber, Path } from './@types/index';
 
 type InodeEntry = { event: FileSystemEvent, targetPath: Path, inodeNumber: InodeNumber, inodeType: InodeType };
 

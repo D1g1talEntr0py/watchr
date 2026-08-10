@@ -1,14 +1,14 @@
+import { watch } from 'node:fs';
 import EventEmitter from 'node:events';
 import { resolve, dirname, basename, matchesGlob } from 'node:path';
-import { watch } from 'node:fs';
-import type { BigIntStats, WatchOptions } from 'node:fs';
 import { FileSystem } from './file-system';
 import { castError, noop, uniqueSortedArray } from './utils';
 import { FileRenameHandler } from './file-rename-handler';
 import { WatchrStats } from './watchr-stats';
 import { FileEvent, DirectoryEvent, WatcherEvent, renameTimeout } from './constants';
 import { FileSystemEventManager } from './file-system-event-manager';
-import type { Handler, WatchIgnore, Path, WatchrOptions, WatchrConfig, AsyncCallable, Closable, FileSystemEvent } from './@types';
+import type { WatchOptions } from 'node:fs';
+import type { Handler, WatchIgnore, Path, WatchrOptions, WatchrConfig, AsyncCallable, Closable, FileSystemEvent } from './@types/index';
 
 type NativeIgnoreEntry = string | RegExp | ((filename: string) => boolean);
 type NativeIgnoreMatcher = NativeIgnoreEntry | ReadonlyArray<NativeIgnoreEntry>;

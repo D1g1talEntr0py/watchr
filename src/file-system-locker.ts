@@ -1,4 +1,4 @@
-import type { Callable, InodeNumber, Path, Producer } from './@types';
+import type { Callable, InodeNumber, Path, Producer } from './@types/index';
 
 /** A class that manages file system locks for file and directory operations. */
 export class FileSystemLocker {

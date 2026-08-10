@@ -4,7 +4,7 @@ import { RetryQueue } from './retry-queue';
 import { timeout } from './decorators/timeout';
 import { FileSystemEntries } from './file-system-entries';
 import { setTimeout as setAsyncTimeout } from 'node:timers/promises';
-import type { DirectoryReadOptions, NodeError, NodeErrorCode, Stats } from './@types';
+import type { DirectoryReadOptions, NodeError, NodeErrorCode, Stats } from './@types/index';
 
 const retryErrorCodes: Set<NodeErrorCode> = new Set([ 'EMFILE', 'ENFILE', 'EAGAIN', 'EBUSY', 'EACCESS', 'EACCES', 'EACCS', 'EPERM' ]);
 const recursiveReadUnsupportedErrorCodes = new Set([ 'ERR_INVALID_ARG_VALUE', 'ERR_INVALID_OPT_VALUE' ]);

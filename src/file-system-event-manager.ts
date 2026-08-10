@@ -4,7 +4,7 @@ import { FileSystem } from './file-system';
 import { NodeWatcherEvent, NodeTargetEvent, FileSystemEvent } from './constants';
 import type { Watchr } from './watchr';
 import type { FileSystemStateManager } from './file-system-state-manager';
-import type { Event, NodeEventHandler, Path, WatchrOptions, WatchrConfig } from './@types';
+import type { Event, NodeEventHandler, Path, WatchrOptions, WatchrConfig } from './@types/index';
 
 /** Manages file system events for a specific folder */
 export class FileSystemEventManager {

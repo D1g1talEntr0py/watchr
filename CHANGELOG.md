@@ -1,3 +1,71 @@
+## [3.2.0](https://github.com/D1g1talEntr0py/watchr/compare/v3.1.0...v3.2.0) (2026-08-10)
+* **stats:** replace bigint timestamps with Temporal.Instant (5aab409e095431d5d63ad48f3f04b2431715b310)
+Switches from raw bigint nanosecond timestamps to Temporal.Instant
+objects for modification and change times in WatchrStats.
+
+- Adds temporal-polyfill-lite as a runtime dependency to polyfill the
+  Temporal API in environments without native support
+- Removes bigint arithmetic in favour of Temporal comparison methods
+- Updates fallback stats creation to supply Temporal.Instant fields
+- Updates all tests to include mtimeInstant/ctimeInstant in mock stats
+
+* **core:** use performance.now() for fallback scan timing (f81e7b55ef90df2e93e327947dcdd6a8a14ebef5)
+Replaces Date.now() with performance.now() when measuring elapsed time
+between directory fallback scans.
+
+- Provides a monotonic clock, preventing incorrect delay calculations
+  if the system clock is adjusted during a scan interval
+
+* **build:** inline declaration transformer and bundle single entrypoint (660ee78345a20ded783973d65e768f36a793ab4c)
+Removes the external esbuild JS-extension plugin for source builds and
+inlines the equivalent logic directly into the TypeScript declaration
+emit step.
+
+- Switches esbuild to bundle mode targeting a single entrypoint,
+  externalising temporal-polyfill-lite
+- Inlines a TypeScript afterDeclarations transformer that appends .js
+  to relative import paths in generated .d.ts files
+- Injects a Temporal reference directive into declaration files that
+  reference the Temporal API
+- Moves the extension plugin to scripts/ for benchmark use only
+
+* **eslint:** simplify config and tighten jsdoc rules (fadf44d79e2cadd9ce110d8bddbc7915965585eb)
+Consolidates ESLint setup by removing redundant plugin registrations
+and switching to automatic tsconfig resolution.
+
+- Drops separate @typescript-eslint plugin/parser imports in favour of
+  the unified typescript-eslint package, removing a ts-expect-error
+- Switches to project:true for tsconfig resolution instead of an
+  explicit list of paths
+- Expands ignore patterns to cover scripts/ and src/@types
+- Disables jsdoc/require-returns and constructor jsdoc checks to
+  reduce noise on internal utility code
+
+* **imports:** use explicit index path for [@types](https://github.com/types) imports (040b4f9c7fa726f5dcea55965a89e80444562f0d)
+Updates all internal type imports to reference ./@types/index explicitly
+rather than relying on directory index resolution.
+
+- Ensures reliable resolution under the new bundled build where implicit
+  directory index lookup behaviour may differ
+
+* **benchmarks:** add JSDoc comments and inline renameTimeout constant (a94e31c005649d0bec10d9da81a44cacf9dada61)
+Improves readability and satisfies updated jsdoc lint rules across both
+benchmark files.
+
+- Adds class-level and method-level JSDoc to EventQueue,
+  NativeEventStream, WatchrEventStream, and utility functions
+- Inlines the renameTimeout constant to remove a runtime dependency on
+  the built dist/constants.js output
+- Removes trailing commas to match project style conventions
+
+* **deps:** bump dev dependencies to latest minor versions (99969415bc927558627bb080581177e5aabcb260)
+- esbuild 0.28.1 → 0.28.2
+- eslint 10.8.0 → 10.8.1
+- eslint-plugin-jsdoc 63 → 64
+- @types/node 26.1 → 26.2
+- Transitive updates: jsdoc-type-pratt-parser, comment-parser,
+  are-docs-informative, @es-joy/jsdoccomment
+
 ## [3.1.0](https://github.com/D1g1talEntr0py/watchr/compare/v3.0.2...v3.1.0) (2026-08-08)
 * **bench:** add diagnostics benchmark workflow (eaa689b8627e8ec82673472e7011dde4a0c4a5d3)
 - introduces targeted diagnostics to compare startup, fallback scanning, and stat overhead

@@ -1,28 +1,20 @@
 import eslint from '@eslint/js';
 import { defineConfig } from 'eslint/config';
 import jsdoc from 'eslint-plugin-jsdoc';
-import tsEslint from 'typescript-eslint';
-import tsParser from '@typescript-eslint/parser';
-import typeScriptEslint from '@typescript-eslint/eslint-plugin';
+import tslint from 'typescript-eslint';
 
-export default defineConfig({ ignores: [ 'node_modules/**', 'tests/**', 'dist/**', '*.config.[tj]s' ] }, {
+export default defineConfig({ ignores: [ 'node_modules/**', 'tests/**', 'dist/**', '*.config.ts', 'scripts/**', 'src/@types' ] }, {
 	extends: [
 		eslint.configs.recommended,
 		jsdoc.configs['flat/recommended-typescript'],
-		...tsEslint.configs.recommended,
-		...tsEslint.configs.recommendedTypeChecked
+		...tslint.configs.recommended,
+		...tslint.configs.recommendedTypeChecked
 	],
-	// @ts-expect-error - plugin needs update...
-	plugins: { typeScriptEslint, jsdoc },
+	plugins: { '@typescript-eslint': tslint.plugin, jsdoc },
 	languageOptions: {
-		parser: tsParser,
+		parser: tslint.parser,
 		parserOptions: {
-			project: [
-				'./tsconfig.json',
-				'./tests/tsconfig.json',
-				'./benchmarks/tsconfig.json',
-				'./tsconfig.tooling.json'
-			],
+			project: true,
 			ecmaFeatures: {	impliedStrict: true	},
 			tsconfigRootDir: import.meta.dirname,
 			allowAutomaticSingleRunInference: true,
@@ -38,12 +30,14 @@ export default defineConfig({ ignores: [ 'node_modules/**', 'tests/**', 'dist/**
 		}
 	},
 	rules: {
+		'jsdoc/require-returns': 0,
 		'jsdoc/check-param-names': [ 'error', { checkDestructured: false	}	],
 		'jsdoc/require-param': [ 'error',	{ checkDestructured: false } ],
 		'jsdoc/tag-lines': 0,
 		'jsdoc/no-defaults': 0,
 		'jsdoc/require-jsdoc': [ 'error',	{
 				exemptEmptyConstructors: true,
+				checkConstructors: false,
 				require: {
 					ClassDeclaration: true,
 					FunctionExpression: true,

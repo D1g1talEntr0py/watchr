@@ -33,8 +33,8 @@ export class WatchrStats {
 	constructor(stats: Stats) {
 		this._inodeNumber = (stats.ino <= Number.MAX_SAFE_INTEGER) ? Number(stats.ino) : stats.ino;
 		this._size = Number(stats.size);
-		this._modifiedTime = stats.mtimeInstant;
-		this._changeTime = stats.ctimeInstant;
+		this._modifiedTime = WatchrStats.resolveInstant(stats.mtimeInstant, stats.mtimeNs);
+		this._changeTime = WatchrStats.resolveInstant(stats.ctimeInstant, stats.ctimeNs);
 		const modifiedTimeNanoseconds = this._modifiedTime.epochNanoseconds;
 		this._modifiedTimeMs = Number(modifiedTimeNanoseconds / NANOSECONDS_PER_MILLISECOND) + (Number(modifiedTimeNanoseconds % NANOSECONDS_PER_MILLISECOND) / Number(NANOSECONDS_PER_MILLISECOND));
 		this._isFile = stats.isFile();
@@ -128,5 +128,15 @@ export class WatchrStats {
 			&& this._isFile === other._isFile
 			&& this._isDirectory === other._isDirectory
 			&& this._isSymbolicLink === other._isSymbolicLink;
+	}
+
+	/**
+	 * Resolves a temporal instant from stats fields across Node versions.
+	 * @param instant - Native instant when available.
+	 * @param nanoseconds - Nanosecond timestamp fallback.
+	 * @returns A temporal instant.
+	 */
+	private static resolveInstant(instant: Temporal.Instant | undefined, nanoseconds: bigint): Temporal.Instant {
+		return instant ?? Temporal.Instant.fromEpochNanoseconds(nanoseconds);
 	}
 }

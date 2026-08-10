@@ -97,6 +97,16 @@ describe('WatchrStats', () => {
 
 			expect(watchrStats.modifiedTimeMs).toBe(1.0009);
 		});
+
+		it('should derive fractional milliseconds from mtimeNs when mtimeInstant is unavailable', () => {
+			const watchrStats = new WatchrStats(({
+				...mockStats,
+				mtimeNs: 1_000_900n,
+				mtimeInstant: undefined,
+			} as unknown) as Stats);
+
+			expect(watchrStats.modifiedTimeMs).toBe(1.0009);
+		});
 	});
 
 	describe('modifiedTime', () => {
@@ -104,12 +114,32 @@ describe('WatchrStats', () => {
 			const watchrStats = new WatchrStats(mockStats);
 			expect(watchrStats.modifiedTime).toBe(mockStats.mtimeInstant);
 		});
+
+		it('should create the modification instant from mtimeNs when mtimeInstant is unavailable', () => {
+			const watchrStats = new WatchrStats(({
+				...mockStats,
+				mtimeNs: 1_000_900n,
+				mtimeInstant: undefined,
+			} as unknown) as Stats);
+
+			expect(watchrStats.modifiedTime).toStrictEqual(Temporal.Instant.fromEpochNanoseconds(1_000_900n));
+		});
 	});
 
 	describe('changeTime', () => {
 		it('should return the status change instant', () => {
 			const watchrStats = new WatchrStats(mockStats);
 			expect(watchrStats.changeTime).toBe(mockStats.ctimeInstant);
+		});
+
+		it('should create the status change instant from ctimeNs when ctimeInstant is unavailable', () => {
+			const watchrStats = new WatchrStats(({
+				...mockStats,
+				ctimeNs: 2_000_100n,
+				ctimeInstant: undefined,
+			} as unknown) as Stats);
+
+			expect(watchrStats.changeTime).toStrictEqual(Temporal.Instant.fromEpochNanoseconds(2_000_100n));
 		});
 	});
 

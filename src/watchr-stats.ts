@@ -1,4 +1,7 @@
-import type { InodeNumber, Stats } from './@types';
+import './temporal-polyfill';
+import type { InodeNumber, Stats } from './@types/index';
+
+const NANOSECONDS_PER_MILLISECOND = 1_000_000n;
 
 /**
  * This class is intended to be used as a wrapper around the stats objects
@@ -10,10 +13,10 @@ export class WatchrStats {
 	private readonly _inodeNumber: InodeNumber;
 	/** The size of the file or directory. */
 	private readonly _size: number;
-	/** Last modification time in nanoseconds. */
-	private readonly _modifiedTimeNs: bigint;
-	/** Last status change time in nanoseconds. */
-	private readonly _changeTimeNs: bigint;
+	/** Last modification time. */
+	private readonly _modifiedTime: Temporal.Instant;
+	/** Last status change time. */
+	private readonly _changeTime: Temporal.Instant;
 	/** Last modification time in milliseconds. */
 	private readonly _modifiedTimeMs: number;
 	/** True if the stats object represents a file. */
@@ -30,31 +33,31 @@ export class WatchrStats {
 	constructor(stats: Stats) {
 		this._inodeNumber = (stats.ino <= Number.MAX_SAFE_INTEGER) ? Number(stats.ino) : stats.ino;
 		this._size = Number(stats.size);
-		this._modifiedTimeNs = typeof stats.mtimeNs === 'bigint' ? stats.mtimeNs : BigInt(stats.mtimeNs ?? 0);
-		this._changeTimeNs = typeof stats.ctimeNs === 'bigint' ? stats.ctimeNs : BigInt(stats.ctimeNs ?? 0);
-		const baseModifiedTimeMs = Number(stats.mtimeMs ?? 0);
-		this._modifiedTimeMs = typeof stats.mtimeNs === 'bigint' ? Number(stats.mtimeNs / 1_000_000n) + Number(stats.mtimeNs % 1_000_000n) / 1_000_000 : baseModifiedTimeMs;
+		this._modifiedTime = stats.mtimeInstant;
+		this._changeTime = stats.ctimeInstant;
+		const modifiedTimeNanoseconds = this._modifiedTime.epochNanoseconds;
+		this._modifiedTimeMs = Number(modifiedTimeNanoseconds / NANOSECONDS_PER_MILLISECOND) + (Number(modifiedTimeNanoseconds % NANOSECONDS_PER_MILLISECOND) / Number(NANOSECONDS_PER_MILLISECOND));
 		this._isFile = stats.isFile();
 		this._isDirectory = stats.isDirectory();
 		this._isSymbolicLink = stats.isSymbolicLink();
 	}
 
 	/**
-	 * Returns the last modification time in nanoseconds.
+	 * Returns the last modification time.
 	 *
-	 * @returns The last modification time in nanoseconds.
+	 * @returns The last modification time.
 	 */
-	get modifiedTimeNs(): bigint {
-		return this._modifiedTimeNs;
+	get modifiedTime(): Temporal.Instant {
+		return this._modifiedTime;
 	}
 
 	/**
-	 * Returns the last status change time in nanoseconds.
+	 * Returns the last status change time.
 	 *
-	 * @returns The last status change time in nanoseconds.
+	 * @returns The last status change time.
 	 */
-	get changeTimeNs(): bigint {
-		return this._changeTimeNs;
+	get changeTime(): Temporal.Instant {
+		return this._changeTime;
 	}
 
 	/**
@@ -115,13 +118,13 @@ export class WatchrStats {
 	 * Checks whether this snapshot is equal to another snapshot using canonical
 	 * change-detection fields.
 	 * @param other - The stats snapshot to compare against.
-	 * @returns True when inode, size, nanosecond timestamps, and type flags match.
+	 * @returns True when inode, size, timestamps, and type flags match.
 	 */
 	equals(other: WatchrStats): boolean {
 		return this._inodeNumber === other._inodeNumber
 			&& this._size === other._size
-			&& this._modifiedTimeNs === other._modifiedTimeNs
-			&& this._changeTimeNs === other._changeTimeNs
+			&& this._modifiedTime.equals(other._modifiedTime)
+			&& this._changeTime.equals(other._changeTime)
 			&& this._isFile === other._isFile
 			&& this._isDirectory === other._isDirectory
 			&& this._isSymbolicLink === other._isSymbolicLink;

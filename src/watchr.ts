@@ -287,10 +287,15 @@ class Watchr extends EventEmitter implements Closable {
 	 * @returns A synthetic stats object with default values.
 	 */
 	private static createFallbackStats(): WatchrStats {
-		const nowMs = Date.now();
+		const nowMs = Math.trunc(performance.now());
+		const nowDate = new Date(nowMs);
+		const nowInstant = Temporal.Instant.fromEpochMilliseconds(nowMs);
 		const nowNs = BigInt(nowMs) * 1_000_000n;
 		const nowMsBigInt = BigInt(nowMs);
-		const fallbackStats: BigIntStats = {
+		const alwaysTrue = () => true;
+		const alwaysFalse = () => false;
+
+		return new WatchrStats({
 			ino: 0n,
 			size: 0n,
 			atimeNs: nowNs,
@@ -301,13 +306,17 @@ class Watchr extends EventEmitter implements Closable {
 			mtimeMs: nowMsBigInt,
 			ctimeMs: nowMsBigInt,
 			birthtimeMs: nowMsBigInt,
-			isFile: () => true,
-			isDirectory: () => false,
-			isSymbolicLink: () => false,
-			isBlockDevice: () => false,
-			isCharacterDevice: () => false,
-			isFIFO: () => false,
-			isSocket: () => false,
+			atimeInstant: nowInstant,
+			mtimeInstant: nowInstant,
+			ctimeInstant: nowInstant,
+			birthtimeInstant: nowInstant,
+			isFile: alwaysTrue,
+			isDirectory: alwaysFalse,
+			isSymbolicLink: alwaysFalse,
+			isBlockDevice: alwaysFalse,
+			isCharacterDevice: alwaysFalse,
+			isFIFO: alwaysFalse,
+			isSocket: alwaysFalse,
 			mode: 0n,
 			nlink: 0n,
 			uid: 0n,
@@ -316,13 +325,11 @@ class Watchr extends EventEmitter implements Closable {
 			blksize: 0n,
 			blocks: 0n,
 			dev: 0n,
-			atime: new Date(nowMs),
-			mtime: new Date(nowMs),
-			ctime: new Date(nowMs),
-			birthtime: new Date(nowMs)
-		};
-
-		return new WatchrStats(fallbackStats);
+			atime: nowDate,
+			mtime: nowDate,
+			ctime: nowDate,
+			birthtime: nowDate
+		});
 	}
 
 	/**

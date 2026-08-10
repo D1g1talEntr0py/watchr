@@ -13,6 +13,10 @@ describe('WatchrStats', () => {
 		mtimeNs: 1_000_000n,
 		ctimeNs: 0n,
 		birthtimeNs: 0n,
+		atimeInstant: Temporal.Instant.fromEpochMilliseconds(0),
+		mtimeInstant: Temporal.Instant.fromEpochMilliseconds(1),
+		ctimeInstant: Temporal.Instant.fromEpochMilliseconds(0),
+		birthtimeInstant: Temporal.Instant.fromEpochMilliseconds(0),
 		isBlockDevice: () => false,
 		isCharacterDevice: () => false,
 		isFIFO: () => false,
@@ -75,37 +79,37 @@ describe('WatchrStats', () => {
 			expect(watchrStats.modifiedTimeMs).toBe(1);
 		});
 
-		it('should preserve sub-millisecond precision from mtimeNs', () => {
-			const first = new WatchrStats({ ...mockStats, mtimeMs: 1n, mtimeNs: 1_000_100n });
-			const second = new WatchrStats({ ...mockStats, mtimeMs: 1n, mtimeNs: 1_000_900n });
+		it('should preserve sub-millisecond precision from mtimeInstant', () => {
+			const first = new WatchrStats({ ...mockStats, mtimeInstant: Temporal.Instant.from('1970-01-01T00:00:00.0010001Z') });
+			const second = new WatchrStats({ ...mockStats, mtimeInstant: Temporal.Instant.from('1970-01-01T00:00:00.0010009Z') });
 
 			expect(first.modifiedTimeMs).toBe(1.0001);
 			expect(second.modifiedTimeMs).toBe(1.0009);
 			expect(second.modifiedTimeMs).toBeGreaterThan(first.modifiedTimeMs);
 		});
 
-		it('should not double-count fractional milliseconds already reflected in mtimeMs', () => {
+		it('should derive fractional milliseconds from mtimeInstant', () => {
 			const watchrStats = new WatchrStats(({
 				...mockStats,
 				mtimeMs: 1.0009,
-				mtimeNs: 1_000_900n,
+				mtimeInstant: Temporal.Instant.from('1970-01-01T00:00:00.0010009Z'),
 			} as unknown) as Stats);
 
 			expect(watchrStats.modifiedTimeMs).toBe(1.0009);
 		});
 	});
 
-	describe('modifiedTimeNs', () => {
-		it('should return the correct modified time in nanoseconds', () => {
+	describe('modifiedTime', () => {
+		it('should return the modification instant', () => {
 			const watchrStats = new WatchrStats(mockStats);
-			expect(watchrStats.modifiedTimeNs).toBe(1_000_000n);
+			expect(watchrStats.modifiedTime).toBe(mockStats.mtimeInstant);
 		});
 	});
 
-	describe('changeTimeNs', () => {
-		it('should return the correct status change time in nanoseconds', () => {
+	describe('changeTime', () => {
+		it('should return the status change instant', () => {
 			const watchrStats = new WatchrStats(mockStats);
-			expect(watchrStats.changeTimeNs).toBe(0n);
+			expect(watchrStats.changeTime).toBe(mockStats.ctimeInstant);
 		});
 	});
 
@@ -166,14 +170,14 @@ describe('WatchrStats', () => {
 
 		it('should return false when modified time differs', () => {
 			const left = new WatchrStats(mockStats);
-			const right = new WatchrStats({ ...mockStats, mtimeNs: 2n });
+			const right = new WatchrStats({ ...mockStats, mtimeInstant: Temporal.Instant.fromEpochMilliseconds(2) });
 
 			expect(left.equals(right)).toBe(false);
 		});
 
 		it('should return false when status change time differs', () => {
 			const left = new WatchrStats(mockStats);
-			const right = new WatchrStats({ ...mockStats, ctimeNs: 2n });
+			const right = new WatchrStats({ ...mockStats, ctimeInstant: Temporal.Instant.fromEpochMilliseconds(2) });
 
 			expect(left.equals(right)).toBe(false);
 		});

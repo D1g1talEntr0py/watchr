@@ -29,25 +29,32 @@ const nativeUnlinkDir = join(benchmarkRoot, 'native-unlink');
 
 const benchmarkWatchOptions: WatchrOptions = {
 	ignoreInitial: true,
-	renameTimeout: 0,
+	renameTimeout: 0
 };
 
 const renameBenchmarkWatchOptions: WatchrOptions = {
 	ignoreInitial: true,
-	renameTimeout,
+	renameTimeout
 };
 
 let sequence = 0;
 
+/**
+ * Generates a unique filename with the given prefix.
+ * @param prefix - The prefix for the filename.
+ * @returns A unique filename string.
+ */
 function uniqueName(prefix: string): string {
 	sequence += 1;
 	return `${prefix}-${Date.now()}-${sequence}.txt`;
 }
 
+/** Event queue for managing asynchronous events. */
 class EventQueue {
 	private pending = 0;
 	private readonly waiters: Array<() => void> = [];
 
+	/** Notifies the next waiter in the queue or increments the pending count if no waiters are present. */
 	notify(): void {
 		const waiter = this.waiters.shift();
 
@@ -59,6 +66,12 @@ class EventQueue {
 		waiter();
 	}
 
+	/**
+	 * Waits for the next event in the queue or times out after the specified duration.
+	 * @param message - The error message for the timeout.
+	 * @param timeout - The timeout duration in milliseconds.
+	 * @returns A promise that resolves when the event occurs or rejects on timeout.
+	 */
 	wait(message: string, timeout = timeoutMs): Promise<void> {
 		if (this.pending > 0) {
 			this.pending -= 1;
@@ -82,6 +95,7 @@ class EventQueue {
 	}
 }
 
+/** A wrapper around the native fs.watch API that provides a queue for managing asynchronous events. */
 class NativeEventStream {
 	private readonly watcher;
 	private readonly queue = new EventQueue();
@@ -90,15 +104,22 @@ class NativeEventStream {
 		this.watcher = watch(path, () => this.queue.notify());
 	}
 
+	/**
+	 * Waits for the next event in the queue or times out after the specified duration.
+	 * @param message - The error message for the timeout.
+	 * @returns A promise that resolves when the event occurs or rejects on timeout.
+	 */
 	wait(message: string): Promise<void> {
 		return this.queue.wait(message);
 	}
 
+	/** Closes the native fs.watch watcher. */
 	close(): void {
 		this.watcher.close();
 	}
 }
 
+/** A wrapper around the Watchr class that provides a queue for managing asynchronous events. */
 class WatchrEventStream {
 	private readonly watcher: Watchr;
 	private readonly queue = new EventQueue();
@@ -108,6 +129,13 @@ class WatchrEventStream {
 		this.watcher.on(event, () => this.queue.notify());
 	}
 
+	/**
+	 * Creates a new WatchrEventStream instance and waits for the watcher to be ready.
+	 * @param path - The path to watch.
+	 * @param options - The Watchr options.
+	 * @param event - The event type to listen for.
+	 * @returns A promise that resolves to the WatchrEventStream instance when ready.
+	 */
 	static async create(path: string, options: WatchrOptions, event: WatchrBenchEvent): Promise<WatchrEventStream> {
 		const stream = new WatchrEventStream(path, options, event);
 
@@ -117,15 +145,29 @@ class WatchrEventStream {
 		return stream;
 	}
 
+	/**
+	 * Waits for the next event in the queue or times out after the specified duration.
+	 * @param message - The error message for the timeout.
+	 * @returns A promise that resolves when the event occurs or rejects on timeout.
+	 */
 	wait(message: string): Promise<void> {
 		return this.queue.wait(message);
 	}
 
+	/** Closes the Watchr watcher. */
 	close(): void {
 		this.watcher.close();
 	}
 }
 
+/**
+ * Creates a Watchr instance, waits for it to be ready, and executes a callback function with the watcher.
+ * Ensures that the watcher is closed after the callback is executed, even if an error occurs.
+ * @param target - The path to watch.
+ * @param options - The Watchr options.
+ * @param callback - The callback function to execute with the watcher.
+ * @returns A promise that resolves when the callback has completed and the watcher has been closed.
+ */
 async function withWatchr(target: string, options: WatchrOptions, callback: (watcher: Watchr) => Promise<void>): Promise<void> {
 	const watcher = new Watchr(target, options);
 	await watcher.readyLock;
@@ -138,6 +180,14 @@ async function withWatchr(target: string, options: WatchrOptions, callback: (wat
 	}
 }
 
+/**
+ * Waits for a specified number of events of a given type to occur on a Watchr instance, or times out after a specified duration.
+ * @param watcher - The Watchr instance to monitor.
+ * @param event - The type of event to wait for ('add', 'change', 'unlink', 'rename', or 'renameDir').
+ * @param count - The number of events to wait for.
+ * @param timeout - The maximum time to wait for the events, in milliseconds (default is 5000 ms).
+ * @returns A promise that resolves when the specified number of events have occurred, or rejects if the timeout is reached.
+ */
 function waitForWatchrEventCount(watcher: Watchr, event: WatchrBenchEvent, count: number, timeout = timeoutMs): Promise<void> {
 	return new Promise((resolve, reject) => {
 		let seen = 0;
@@ -159,6 +209,11 @@ function waitForWatchrEventCount(watcher: Watchr, event: WatchrBenchEvent, count
 	});
 }
 
+/**
+ * Creates a synthetic WatchrStats object with default values for testing purposes.
+ * @param inodeNumber - The inode number to assign to the synthetic stats object.
+ * @returns A WatchrStats instance with default values.
+ */
 function syntheticStats(inodeNumber: number): WatchrStats {
 	return new WatchrStats({
 		isFile: () => true,
@@ -179,7 +234,7 @@ await Promise.all([
 	fs.mkdir(renameDirDir, { recursive: true }),
 	fs.mkdir(nativeCreateDir, { recursive: true }),
 	fs.mkdir(nativeChangeDir, { recursive: true }),
-	fs.mkdir(nativeUnlinkDir, { recursive: true }),
+	fs.mkdir(nativeUnlinkDir, { recursive: true })
 ]);
 
 for (let i = 0; i < 50; i++) {

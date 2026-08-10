@@ -8,21 +8,22 @@ import { tmpdir } from 'node:os';
 import { setTimeout as delay } from 'node:timers/promises';
 import { Watchr } from '../dist/watchr.js';
 import type { WatchrOptions } from '../src/@types/index';
-import { renameTimeout } from '../dist/constants.js';
+
+const renameTimeout = 150;
 
 const watchrFastOptions: WatchrOptions = {
 	ignoreInitial: true,
-	renameTimeout: 0,
+	renameTimeout: 0
 };
 
 const watchrRenameOptions: WatchrOptions = {
 	ignoreInitial: true,
-	renameTimeout,
+	renameTimeout
 };
 
 const watchrRenameRawOptions: WatchrOptions = {
 	ignoreInitial: true,
-	renameTimeout: 0,
+	renameTimeout: 0
 };
 
 const warmupDelayMs = 25;
@@ -48,23 +49,30 @@ const benchmarkNames = {
 	steadyChangeWatchr: 'steady change notification / watchr',
 	steadyRenameNative: 'steady rename operation / native',
 	steadyRenameWatchrSemantic: 'steady rename operation / watchr (semantic rename)',
-	steadyRenameWatchrRaw: 'steady rename operation / watchr (raw event)',
+	steadyRenameWatchrRaw: 'steady rename operation / watchr (raw event)'
 } as const;
 
 const useJsonOutput = process.argv.includes('--format') && process.argv.includes('json');
 
 let sequence = 0;
 
+/**
+ * Returns the next unique file name.
+ * @param prefix - The prefix for the file name.
+ * @returns The next unique file name.
+ */
 function nextName(prefix: string): string {
 	sequence += 1;
 	return `${prefix}-${Date.now()}-${sequence}.txt`;
 }
 
+/** A simple event queue for managing asynchronous events. */
 class EventQueue {
 	private pending = 0;
 	private readonly waiters: Array<() => void> = [];
 
-	notify(): void {
+	/** Notifies the next waiter in the queue, or increments the pending count if no waiters are present. */
+	notify() {
 		const resolve = this.waiters.shift();
 
 		if (resolve === undefined) {
@@ -75,6 +83,13 @@ class EventQueue {
 		resolve();
 	}
 
+	/**
+	 * Waits for an event to be notified, with an optional timeout.
+	 * @param timeout - The maximum time to wait for an event, in milliseconds.
+	 * @param message - The error message to use if the timeout is reached.
+	 * @returns A promise that resolves when an event is notified or rejects if the timeout is reached.
+	 * @throws {Error} An error if the timeout is reached before an event is notified.
+	 */
 	wait(timeout: number = timeoutMs, message = '🚨 benchmark timed out waiting for event'): Promise<void> {
 		if (this.pending > 0) {
 			this.pending -= 1;
@@ -98,6 +113,7 @@ class EventQueue {
 	}
 }
 
+/** A simple wrapper around a native file system event stream. */
 class NativeEventStream {
 	private readonly path: string;
 	private readonly queue = new EventQueue();
@@ -108,15 +124,22 @@ class NativeEventStream {
 		this.watcher = watch(this.path, () => this.queue.notify());
 	}
 
+	/**
+	 * Waits for a file system event to occur, with an optional timeout.
+	 * @param message - The error message to use if the timeout is reached.
+	 * @returns A promise that resolves when a file system event occurs or rejects if the timeout is reached.
+	 */
 	wait(message: string): Promise<void> {
 		return this.queue.wait(timeoutMs, message);
 	}
 
+	/** Closes the native file system event stream. */
 	close(): void {
 		this.watcher.close();
 	}
 }
 
+/** A simple wrapper around a Watchr event stream. */
 class WatchrEventStream {
 	private readonly queue = new EventQueue();
 	private readonly watcher: Watchr;
@@ -130,6 +153,13 @@ class WatchrEventStream {
 		}
 	}
 
+	/**
+	 * Creates a new WatchrEventStream instance and waits for the watcher to be ready.
+	 * @param path - The path to watch.
+	 * @param options - The Watchr options to use.
+	 * @param event - The event type to listen for.
+	 * @returns A promise that resolves to a new WatchrEventStream instance when the watcher is ready.
+	 */
 	static async create(path: string, options: WatchrOptions, event: 'add' | 'change' | 'rename' | 'unlink' | 'all'): Promise<WatchrEventStream> {
 		const stream = new WatchrEventStream(path, options, event);
 
@@ -139,15 +169,28 @@ class WatchrEventStream {
 		return stream;
 	}
 
+	/**
+	 * Waits for a file system event to occur, with an optional timeout.
+	 * @param message - The error message to use if the timeout is reached.
+	 * @returns A promise that resolves when a file system event occurs or rejects if the timeout is reached.
+	 */
 	wait(message: string): Promise<void> {
 		return this.queue.wait(timeoutMs, message);
 	}
 
+	/** Closes the Watchr event stream. */
 	close(): void {
 		this.watcher.close();
 	}
 }
 
+/**
+ * Calculates the average time in nanoseconds for a specific benchmark alias from the benchmark results.
+ * @param result - The benchmark results returned by the run function.
+ * @param alias - The alias of the benchmark to calculate the average for.
+ * @returns The average time in nanoseconds for the specified benchmark alias.
+ * @throws {Error} If the benchmark alias is not found or if the benchmark did not produce stats.
+ */
 function averageNs(result: Awaited<ReturnType<typeof run>>, alias: string): number {
 	const trial = result.benchmarks.find((benchmark) => benchmark.alias === alias);
 
@@ -164,6 +207,11 @@ function averageNs(result: Awaited<ReturnType<typeof run>>, alias: string): numb
 	return runResult.stats.avg;
 }
 
+/**
+ * Converts nanoseconds to milliseconds.
+ * @param ns - The time in nanoseconds.
+ * @returns The time in milliseconds.
+ */
 function ms(ns: number): number {
 	return ns / 1_000_000;
 }
@@ -177,7 +225,7 @@ await Promise.all([
 	fs.mkdir(steadyChangeWatchrDir, { recursive: true }),
 	fs.mkdir(steadyRenameNativeDir, { recursive: true }),
 	fs.mkdir(steadyRenameWatchrSemanticDir, { recursive: true }),
-	fs.mkdir(steadyRenameWatchrRawDir, { recursive: true }),
+	fs.mkdir(steadyRenameWatchrRawDir, { recursive: true })
 ]);
 
 const steadyCreateNative = new NativeEventStream(steadyCreateNativeDir);
@@ -202,10 +250,10 @@ await Promise.all([
 	fs.writeFile(watchrChangeTarget, 'seed-watchr'),
 	fs.writeFile(nativeRenameTargetA, 'seed-native-rename'),
 	fs.writeFile(watchrRenameSemanticTargetA, 'seed-watchr-semantic-rename'),
-	fs.writeFile(watchrRenameRawTargetA, 'seed-watchr-raw-rename'),
+	fs.writeFile(watchrRenameRawTargetA, 'seed-watchr-raw-rename')
 ]);
 
-await group('Native vs Watchr (minimal feature overhead)', async () => {
+group('Native vs Watchr (minimal feature overhead)', () => {
 	bench(benchmarkNames.coldNative, async () => {
 		const filePath = join(coldNativeDir, nextName('native-cold-add'));
 

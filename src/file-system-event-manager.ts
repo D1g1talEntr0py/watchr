@@ -386,7 +386,7 @@ export class FileSystemEventManager {
 
 		if (this.directoryFallbackScanScheduled || this.directoryFallbackScanInFlight !== undefined) { return }
 
-		const delay = Math.max(0, FileSystemEventManager.directoryFallbackScanIntervalMs - (Date.now() - this.lastDirectoryFallbackScanAt));
+		const delay = Math.max(0, FileSystemEventManager.directoryFallbackScanIntervalMs - (performance.now() - this.lastDirectoryFallbackScanAt));
 		this.directoryFallbackScanScheduled = true;
 
 		if (delay === 0) {
@@ -409,7 +409,7 @@ export class FileSystemEventManager {
 		if (!this.directoryFallbackScanQueued || this.directoryFallbackScanInFlight !== undefined) { return }
 
 		this.directoryFallbackScanQueued = false;
-		this.lastDirectoryFallbackScanAt = Date.now();
+		this.lastDirectoryFallbackScanAt = performance.now();
 
 		const event = this.directoryFallbackScanEvent ?? NodeTargetEvent.CHANGE;
 		this.directoryFallbackScanEvent = undefined;

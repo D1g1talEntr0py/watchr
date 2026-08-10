@@ -1,7 +1,7 @@
 {
   "name": "@d1g1tal/watchr",
   "author": "D1g1talEntr0py",
-  "version": "3.2.0",
+  "version": "3.2.1",
   "license": "MIT",
   "description": "A native NodeJS file system watcher with optional rename detection support. Forked from github:fabiospampinato/watcher",
   "homepage": "https://github.com/D1g1talEntr0py/watchr#readme",

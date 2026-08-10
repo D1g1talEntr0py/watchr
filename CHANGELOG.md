@@ -1,3 +1,6 @@
+## [3.2.1](https://github.com/D1g1talEntr0py/watchr/compare/v3.2.0...v3.2.1) (2026-08-10)
+* add resolver to determine how to create an instant (55dee0a901ca3f0936c97bfc765f9efecf667c0d)
+
 ## [3.2.0](https://github.com/D1g1talEntr0py/watchr/compare/v3.1.0...v3.2.0) (2026-08-10)
 * **stats:** replace bigint timestamps with Temporal.Instant (5aab409e095431d5d63ad48f3f04b2431715b310)
 Switches from raw bigint nanosecond timestamps to Temporal.Instant

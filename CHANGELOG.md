@@ -1,3 +1,10 @@
+## [3.2.2](https://github.com/D1g1talEntr0py/watchr/compare/v3.2.1...v3.2.2) (2026-08-22)
+
+
+### Bug Fixes
+
+* **release:** switch to angular preset and update CI ([cbf575d](https://github.com/D1g1talEntr0py/watchr/commit/cbf575d2f6bbc99f19a8f436f8d0069647fcdfa1))
+
 ## [3.2.1](https://github.com/D1g1talEntr0py/watchr/compare/v3.2.0...v3.2.1) (2026-08-10)
 * add resolver to determine how to create an instant (55dee0a901ca3f0936c97bfc765f9efecf667c0d)
 

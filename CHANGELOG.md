@@ -1,3 +1,10 @@
+## [3.2.3](https://github.com/D1g1talEntr0py/watchr/compare/v3.2.2...v3.2.3) (2026-08-22)
+
+
+### Bug Fixes
+
+* **ci:** remove windows from ci tests ([65ac36c](https://github.com/D1g1talEntr0py/watchr/commit/65ac36cc85ffb7655cb63900c0b3ab6c69f4caa1))
+
 ## [3.2.2](https://github.com/D1g1talEntr0py/watchr/compare/v3.2.1...v3.2.2) (2026-08-22)
 
 

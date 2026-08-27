@@ -2,12 +2,12 @@
 export const noop = (): void => {};
 
 /**
- * Creates a unique sorted array from an array.
+ * Creates a unique sorted array from an array without mutating the input.
  * @param array - The array to process.
- * @returns A unique sorted array.
+ * @returns A new unique sorted array.
  */
 export const uniqueSortedArray = <T>(array: T[]): T[] => {
-	return Array.from(new Set(array.sort()));
+	return [ ...new Set(array) ].sort();
 };
 
 /**
@@ -18,5 +18,5 @@ export const uniqueSortedArray = <T>(array: T[]): T[] => {
 export const castError = (exception: unknown): Error => {
 	if (exception instanceof Error) { return exception }
 
-	return new Error(typeof exception === 'string' ? exception : 'Unknown error');
+	return new Error(typeof exception === 'string' ? exception : 'Unknown error', { cause: exception });
 };

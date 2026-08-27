@@ -11,6 +11,16 @@ export class FileSystemEventManager {
 	// TODO: Consider exposing this as a watch option for platform/workload tuning.
 	private static readonly directoryFallbackScanIntervalMs = 10;
 	private static readonly maxConcurrentWatcherEventDispatches = 32;
+	/** Event priorities used to keep the highest-priority event per path during deduplication. */
+	private static readonly eventPriorities = new Map<FileSystemEvent, number>([
+		[ FileSystemEvent.ADD, 4 ],
+		[ FileSystemEvent.ADD_DIR, 4 ],
+		[ FileSystemEvent.CHANGE, 3 ],
+		[ FileSystemEvent.RENAME, 2 ],
+		[ FileSystemEvent.RENAME_DIR, 2 ],
+		[ FileSystemEvent.UNLINK, 1 ],
+		[ FileSystemEvent.UNLINK_DIR, 1 ]
+	]);
 
 	private lock: Promise<void>;
 	private readonly fileSystemPoller: FileSystemStateManager;
@@ -239,15 +249,6 @@ export class FileSystemEventManager {
 	private deduplicateEvents(events: Event[]) {
 		if (events.length < 2) { return events }
 
-		const eventPriorities = new Map<FileSystemEvent, number>([
-			[ FileSystemEvent.ADD, 4 ],
-			[ FileSystemEvent.ADD_DIR, 4 ],
-			[ FileSystemEvent.CHANGE, 3 ],
-			[ FileSystemEvent.RENAME, 2 ],
-			[ FileSystemEvent.RENAME_DIR, 2 ],
-			[ FileSystemEvent.UNLINK, 1 ],
-			[ FileSystemEvent.UNLINK_DIR, 1 ]
-		]);
 		const uniqueEvents: Event[] = [];
 		const eventIndexes = new Map<Path, number>();
 
@@ -263,8 +264,8 @@ export class FileSystemEventManager {
 			}
 
 			const previousEvent = uniqueEvents[existingIndex]!;
-			const previousPriority = eventPriorities.get(previousEvent[0]) ?? 0;
-			const currentPriority = eventPriorities.get(targetEvent) ?? 0;
+			const previousPriority = FileSystemEventManager.eventPriorities.get(previousEvent[0]) ?? 0;
+			const currentPriority = FileSystemEventManager.eventPriorities.get(targetEvent) ?? 0;
 
 			if (currentPriority > previousPriority) {
 				uniqueEvents[existingIndex] = event;
@@ -518,7 +519,7 @@ export class FileSystemEventManager {
 	 */
 	private sanitizeWatcherError(error: NodeJS.ErrnoException): Error {
 		const message = error.code ? `🚨 Watcher error (${error.code})` : '🚨 Watcher error';
-		const sanitizedError = new Error(message) as NodeJS.ErrnoException;
+		const sanitizedError = new Error(message, { cause: error }) as NodeJS.ErrnoException;
 		sanitizedError.code = error.code ?? 'UNKNOWN';
 
 		return sanitizedError;

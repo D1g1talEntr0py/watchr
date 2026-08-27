@@ -135,8 +135,8 @@ class Watchr extends EventEmitter implements Closable {
 
 		try {
 			return ignore(targetPath);
-		} catch {
-			this.error(new Error('🚨 ignore callback failed.'));
+		} catch (error: unknown) {
+			this.error(new Error('🚨 ignore callback failed.', { cause: error }));
 			return true;
 		}
 	}
@@ -477,20 +477,21 @@ class Watchr extends EventEmitter implements Closable {
 		// This method watches paths serially when subpaths are detected to prevent duplicate watchers on the same folder.
 		// For independent paths, parallelization via Promise.all() is used below.
 		const length = targetPaths.length;
-		const targetPathSet = new Set(targetPaths);
-		const hasSubPaths = targetPaths.some((targetPath) => {
+		// Collect every proper ancestor once (walks stop at already-seen ancestors), then check targets against it.
+		const ancestorPaths = new Set<Path>();
+
+		for (const targetPath of targetPaths) {
 			let currentPath = targetPath;
 			let parentPath = dirname(currentPath);
 
-			while (parentPath !== currentPath) {
-				if (targetPathSet.has(parentPath)) { return true }
-
+			while (parentPath !== currentPath && !ancestorPaths.has(parentPath)) {
+				ancestorPaths.add(parentPath);
 				currentPath = parentPath;
 				parentPath = dirname(currentPath);
 			}
+		}
 
-			return false;
-		});
+		const hasSubPaths = targetPaths.some((targetPath) => ancestorPaths.has(targetPath));
 
 		if (hasSubPaths) {
 			// Watching serially

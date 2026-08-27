@@ -13,6 +13,7 @@ export class FileRenameHandler {
 	private readonly directoryLocks: FileSystemLocker;
 	private readonly fileSystemStateManager: FileSystemStateManager;
 	private readonly lockResolver: LockResolver;
+	private readonly canonicalChangedPathsCache: WeakMap<ReadonlySet<Path>, ReadonlySet<Path>>;
 
 	/**
 	 * Creates an instance of FileRenameHandler.
@@ -26,6 +27,7 @@ export class FileRenameHandler {
 		this.directoryLocks = new FileSystemLocker();
 		this.fileSystemStateManager = new FileSystemStateManager();
 		this.lockResolver = new LockResolver();
+		this.canonicalChangedPathsCache = new WeakMap();
 	}
 
 	/**
@@ -44,12 +46,39 @@ export class FileRenameHandler {
 	 * @returns void
 	 */
 	getLockTargetEvent(event: FileSystemEvent, targetPath: Path, timeout?: number, changedPaths?: ReadonlySet<Path>): void {
+		const canonicalChangedPaths = this.getCanonicalChangedPaths(changedPaths);
+
 		switch (event) {
-			case FileSystemEvent.ADD: return this.processLock(targetPath, event, InodeType.FILE, 'add', timeout, changedPaths);
-			case FileSystemEvent.ADD_DIR: return this.processLock(targetPath, event, InodeType.DIR, 'add', timeout, changedPaths);
-			case FileSystemEvent.UNLINK: return this.processLock(targetPath, event, InodeType.FILE, 'unlink', timeout, changedPaths);
-			case FileSystemEvent.UNLINK_DIR: return this.processLock(targetPath, event, InodeType.DIR, 'unlink', timeout, changedPaths);
+			case FileSystemEvent.ADD: return this.processLock(targetPath, event, InodeType.FILE, 'add', timeout, canonicalChangedPaths);
+			case FileSystemEvent.ADD_DIR: return this.processLock(targetPath, event, InodeType.DIR, 'add', timeout, canonicalChangedPaths);
+			case FileSystemEvent.UNLINK: return this.processLock(targetPath, event, InodeType.FILE, 'unlink', timeout, canonicalChangedPaths);
+			case FileSystemEvent.UNLINK_DIR: return this.processLock(targetPath, event, InodeType.DIR, 'unlink', timeout, canonicalChangedPaths);
 		}
+	}
+
+	/**
+	 * Augments a changed-paths set with the canonical form of each path, cached per batch set.
+	 * @param changedPaths - Paths that already emitted a direct CHANGE in the current batch.
+	 * @returns A set containing both raw and canonical forms, or undefined when no set was provided.
+	 */
+	private getCanonicalChangedPaths(changedPaths?: ReadonlySet<Path>): ReadonlySet<Path> | undefined {
+		if (changedPaths === undefined) { return undefined }
+
+		let canonicalChangedPaths = this.canonicalChangedPathsCache.get(changedPaths);
+
+		if (canonicalChangedPaths === undefined) {
+			const augmentedPaths = new Set<Path>();
+
+			for (const changedPath of changedPaths) {
+				augmentedPaths.add(changedPath);
+				augmentedPaths.add(resolve(changedPath));
+			}
+
+			canonicalChangedPaths = augmentedPaths;
+			this.canonicalChangedPathsCache.set(changedPaths, canonicalChangedPaths);
+		}
+
+		return canonicalChangedPaths;
 	}
 
 	/**
@@ -254,22 +283,14 @@ export class FileRenameHandler {
 	}
 
 	/**
-	 * Checks whether a path is present in changed-paths using canonical path matching.
-	 * @param changedPaths - Paths that already emitted a direct CHANGE in the current batch.
+	 * Checks whether a path is present in a changed-paths set that holds raw and canonical forms.
+	 * @param changedPaths - Augmented changed-paths set produced by getCanonicalChangedPaths.
 	 * @param targetPath - Path to check.
 	 * @returns True when the path is represented in the changed set.
 	 */
 	private hasChangedPath(changedPaths: ReadonlySet<Path> | undefined, targetPath: Path): boolean {
 		if (changedPaths === undefined) { return false }
 
-		if (changedPaths.has(targetPath)) { return true }
-
-		const canonicalTargetPath = resolve(targetPath);
-
-		for (const changedPath of changedPaths) {
-			if (resolve(changedPath) === canonicalTargetPath) { return true }
-		}
-
-		return false;
+		return changedPaths.has(targetPath) || changedPaths.has(resolve(targetPath));
 	}
 }

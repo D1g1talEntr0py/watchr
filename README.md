@@ -14,13 +14,12 @@ A modern, TypeScript-first file system watcher built on Node.js native APIs.
 
 ## Features
 
-- **Native Performance**: Built on Node.js native `fs.watch` with recursive watching support (Node.js 22.x+)
+- **Native Performance**: Built on Node.js native `fs.watch` with recursive watching support
 - **TypeScript First**: Written entirely in TypeScript with comprehensive type definitions
 - **Event-Driven Architecture**: Clean, EventEmitter-based API for handling file system events
 - **Rename Detection**: Optional detection of file and directory renames with configurable timeouts
 - **Abort Signal Support**: Built-in AbortController integration for clean cancellation
 - **File Statistics**: Includes file stats with all events for enhanced metadata access
-- **Debouncing**: Configurable event debouncing to reduce noise from rapid file changes
 - **Supported Platforms**: Linux and macOS only. Windows is not supported.
 - **Zero Native Dependencies**: Pure TypeScript implementation with no native binaries
 
@@ -73,7 +72,7 @@ Watchr accepts the following options to customize behavior:
 
 - **`recursive`**: Enable recursive watching of subdirectories
   - Default: `false`
-  - Uses native recursive watching when available (Node.js 20.16+)
+  - Uses Node.js native recursive watching
 
 - **`encoding`**: Character encoding for file paths
   - Default: `'utf8'`

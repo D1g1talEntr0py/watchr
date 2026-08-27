@@ -91,4 +91,31 @@ describe('timeout decorator', () => {
 		const result = await instance.method();
 		expect(result).toBeUndefined();
 	});
+
+	it('should only combine the trailing signal instead of mutating an unrelated AbortSignal in the arguments', async () => {
+		let unrelatedAborted = false;
+		let trailingSignalAborted = false;
+
+		class Test {
+			@timeout(50)
+			async method(unrelatedSignal: AbortSignal, signal?: AbortSignal): Promise<string> {
+				unrelatedSignal.addEventListener('abort', () => {
+					unrelatedAborted = true;
+				}, { once: true });
+
+				signal?.addEventListener('abort', () => {
+					trailingSignalAborted = true;
+				}, { once: true });
+
+				await sleep(100);
+				return 'done';
+			}
+		}
+
+		const instance = new Test();
+		const result = await instance.method(new AbortController().signal, new AbortController().signal);
+		expect(result).toBeUndefined();
+		expect(trailingSignalAborted).toBe(true);
+		expect(unrelatedAborted).toBe(false);
+	});
 });

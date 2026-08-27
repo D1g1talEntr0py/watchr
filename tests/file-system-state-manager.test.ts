@@ -15,7 +15,27 @@ const timestampStats = {
 	ctimeInstant: Temporal.Instant.fromEpochMilliseconds(1),
 };
 
-describe('FileSystemPoller', () => {
+/**
+ * Builds a mock stats object suitable for mocking FileSystem.getStats results.
+ * @param kind - Whether the entry is a file, a directory, or an unsupported type.
+ * @param overrides - Optional stat field overrides.
+ * @returns A mock stats object.
+ */
+function createStats(kind: 'file' | 'dir' | 'other', overrides: Partial<{ ino: bigint, size: bigint, mtime: number, ctime: number }> = {}): Stats {
+	const { ino = 123n, size = 100n, mtime = 1, ctime = 1 } = overrides;
+
+	return {
+		mtimeInstant: Temporal.Instant.fromEpochMilliseconds(mtime),
+		ctimeInstant: Temporal.Instant.fromEpochMilliseconds(ctime),
+		isFile: () => kind === 'file',
+		isDirectory: () => kind === 'dir',
+		isSymbolicLink: () => false,
+		ino,
+		size,
+	} as unknown as Stats;
+}
+
+describe('FileSystemStateManager', () => {
 	let fileSystemStateManager: FileSystemStateManager;
 
   beforeEach(() => {
@@ -201,6 +221,90 @@ describe('FileSystemPoller', () => {
 			const events = await fileSystemStateManager.update('/nonexistent');
 			expect(events).toEqual([]);
 			expect(FileSystem.getStats).toHaveBeenCalledTimes(1);
+		});
+	});
+
+	describe('determineEvents transitions (exercised through update)', () => {
+		const targetPath = '/transition-target';
+
+		/**
+		 * Runs update() with a sequence of mocked stats results and returns the events from the final update.
+		 * @param statsSequence - Ordered FileSystem.getStats results, one per update() call.
+		 * @returns The events produced by the final update() call.
+		 */
+		async function runTransition(...statsSequence: Array<Stats | undefined>): Promise<FileSystemEvent[]> {
+			let events: FileSystemEvent[] = [];
+
+			for (const stats of statsSequence) {
+				vi.mocked(FileSystem.getStats).mockResolvedValueOnce(stats);
+				events = await fileSystemStateManager.update(targetPath);
+			}
+
+			return events;
+		}
+
+		it('no previous + no next (case 0) emits no events', async () => {
+			expect(await runTransition(undefined)).toEqual([]);
+		});
+
+		it('no previous + new directory (case 4) emits addDir', async () => {
+			expect(await runTransition(createStats('dir'))).toEqual([FileSystemEvent.ADD_DIR]);
+		});
+
+		it('no previous + new file (case 5) emits add', async () => {
+			expect(await runTransition(createStats('file'))).toEqual([FileSystemEvent.ADD]);
+		});
+
+		it('previous directory + gone (case 8) emits unlinkDir', async () => {
+			expect(await runTransition(createStats('dir'), undefined)).toEqual([FileSystemEvent.UNLINK_DIR]);
+		});
+
+		it('previous file + gone (case 10) emits unlink', async () => {
+			expect(await runTransition(createStats('file'), undefined)).toEqual([FileSystemEvent.UNLINK]);
+		});
+
+		it('directory to directory with identical stats (case 12) emits unlinkDir + addDir', async () => {
+			expect(await runTransition(createStats('dir'), createStats('dir'))).toEqual([FileSystemEvent.UNLINK_DIR, FileSystemEvent.ADD_DIR]);
+		});
+
+		it('directory to directory with a different inode (case 12) emits unlinkDir + addDir', async () => {
+			expect(await runTransition(createStats('dir', { ino: 123n }), createStats('dir', { ino: 456n }))).toEqual([FileSystemEvent.UNLINK_DIR, FileSystemEvent.ADD_DIR]);
+		});
+
+		it('directory to file (case 13) emits unlinkDir + add', async () => {
+			expect(await runTransition(createStats('dir'), createStats('file', { ino: 456n }))).toEqual([FileSystemEvent.UNLINK_DIR, FileSystemEvent.ADD]);
+		});
+
+		it('file to directory (case 14) emits unlink + addDir', async () => {
+			expect(await runTransition(createStats('file'), createStats('dir', { ino: 456n }))).toEqual([FileSystemEvent.UNLINK, FileSystemEvent.ADD_DIR]);
+		});
+
+		it('file to file with identical stats (case 15, equal) emits no events', async () => {
+			expect(await runTransition(createStats('file'), createStats('file'))).toEqual([]);
+		});
+
+		it('file to file with a changed size (case 15) emits change', async () => {
+			expect(await runTransition(createStats('file', { size: 100n }), createStats('file', { size: 200n }))).toEqual([FileSystemEvent.CHANGE]);
+		});
+
+		it('file to file with a changed modification time (case 15) emits change', async () => {
+			expect(await runTransition(createStats('file', { mtime: 1 }), createStats('file', { mtime: 2 }))).toEqual([FileSystemEvent.CHANGE]);
+		});
+
+		it('file to file with a changed status-change time (case 15) emits change', async () => {
+			expect(await runTransition(createStats('file', { ctime: 1 }), createStats('file', { ctime: 2 }))).toEqual([FileSystemEvent.CHANGE]);
+		});
+
+		it('same-path inode swap between files (case 15, atomic save) emits a single change', async () => {
+			expect(await runTransition(createStats('file', { ino: 123n }), createStats('file', { ino: 456n }))).toEqual([FileSystemEvent.CHANGE]);
+		});
+
+		it('previous file replaced by an unsupported entry type is treated as unlink', async () => {
+			expect(await runTransition(createStats('file'), createStats('other'))).toEqual([FileSystemEvent.UNLINK]);
+		});
+
+		it('unsupported entry type with no previous stats emits no events', async () => {
+			expect(await runTransition(createStats('other'))).toEqual([]);
 		});
 	});
 

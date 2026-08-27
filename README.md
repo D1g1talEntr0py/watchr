@@ -317,7 +317,7 @@ setTimeout(() => watcher.close(), 10000);
 
 ## Requirements
 
-- Node.js 22.x or higher
+- Node.js 24.6.0 or higher
 - TypeScript 6.0.0 or higher (for TypeScript projects)
 
 ## Why Use the Original Watcher Instead?

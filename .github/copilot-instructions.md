@@ -4,7 +4,7 @@
 Watchr is a TypeScript-first file watcher built on native `fs.watch` with inode-based rename detection and an EventEmitter API.
 
 - Runtime: Node.js 24.6+
-- Package manager: pnpm 11.x
+- Package manager: pnpm 12.x
 - Fork of [`fabiospampinato/watcher`](https://github.com/fabiospampinato/watcher) for personal experimentation
 
 ## Architecture Snapshot
@@ -23,6 +23,10 @@ Key modules:
 Supporting types/data:
 - [src/watchr-stats.ts](../src/watchr-stats.ts)
 - [src/file-system-entries.ts](../src/file-system-entries.ts)
+- [src/file-system-locker.ts](../src/file-system-locker.ts)
+- [src/retry-queue.ts](../src/retry-queue.ts)
+- [src/set-multi-map.ts](../src/set-multi-map.ts)
+- [src/temporal-polyfill.ts](../src/temporal-polyfill.ts)
 - [src/@types/index.ts](../src/@types/index.ts)
 
 ## Behavioral Details That Matter
@@ -43,8 +47,8 @@ Supporting types/data:
 ## Build, Test, Benchmark
 
 Build system:
-- [esbuild.config.ts](../esbuild.config.ts): esbuild output + declaration emit via TypeScript Program API
-- [build/extension-plugin.ts](../build/extension-plugin.ts): rewrites emitted imports to `.js`
+- [esbuild.config.ts](../esbuild.config.ts): esbuild output + declaration emit via TypeScript Program API (rewrites emitted declaration imports to `.js` inline)
+- [scripts/extension-plugin.ts](../scripts/extension-plugin.ts): import-extension rewrite esbuild plugin, currently unused
 
 Commands:
 - `pnpm build`

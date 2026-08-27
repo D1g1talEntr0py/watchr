@@ -21,7 +21,7 @@
   "engines": {
     "node": ">=24.6.0"
   },
-  "packageManager": "pnpm@11.22.0",
+  "packageManager": "pnpm@12.0.0",
   "publishConfig": {
     "registry": "https://registry.npmjs.org",
     "access": "public"
@@ -58,16 +58,16 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@types/node": "^26.2.0",
+    "@types/node": "^26.3.0",
     "@typescript/native": "npm:typescript@^7.0.2",
     "@vitest/coverage-v8": "^4.1.11",
     "esbuild": "^0.28.2",
-    "eslint": "^10.9.0",
+    "eslint": "^10.9.1",
     "eslint-plugin-jsdoc": "^64.2.1",
     "memfs": "^4.68.1",
     "mitata": "^1.0.34",
     "typescript": "npm:@typescript/typescript6@^6.0.2",
-    "typescript-eslint": "^8.67.0",
+    "typescript-eslint": "^8.68.0",
     "vitest": "^4.1.11"
   },
   "keywords": [

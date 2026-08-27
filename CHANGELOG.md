@@ -1,3 +1,15 @@
+# [3.3.0](https://github.com/D1g1talEntr0py/watchr/compare/v3.2.3...v3.3.0) (2026-08-27)
+
+
+### Bug Fixes
+
+* **ci:** remove invalid -s from pnpm parameters and fix broken test ([e0bdc1d](https://github.com/D1g1talEntr0py/watchr/commit/e0bdc1db27993658113fbfbd8ecbf65f4c2dbc71))
+
+
+### Features
+
+* **file-rename-handler:** cache canonical changed-paths per batch ([7172fd4](https://github.com/D1g1talEntr0py/watchr/commit/7172fd4807aa02eb82f7b62b99dea195357672f2))
+
 ## [3.2.3](https://github.com/D1g1talEntr0py/watchr/compare/v3.2.2...v3.2.3) (2026-08-22)
 
 

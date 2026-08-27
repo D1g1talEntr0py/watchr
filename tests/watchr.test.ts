@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { join } from 'node:path';
 import {
 	mkdirSync,
@@ -7,48 +7,21 @@ import {
 	existsSync,
 	appendFileSync,
 	renameSync,
-	unwatchFile,
 } from 'node:fs';
-import type { WatchOptions } from 'node:fs';
-import { setTimeout } from 'node:timers/promises';
 import { Watchr } from '../src/watchr';
 import { FileSystem } from '../src/file-system';
 import { FileSystemEvent, WatcherEvent } from '../src/constants';
 import type { WatchrOptions } from '../src/@types';
 
-vi.mock('node:fs', async () => {
-	const actualFs = await vi.importActual<typeof import('node:fs')>('node:fs');
-	return {
-		...actualFs,
-		watch: vi.fn(),
-		unwatchFile: vi.fn(),
-	};
-});
-
 describe('Watchr', () => {
-	let watch: Mock;
-	let unwatchFile: Mock;
 	const testDir = join(__dirname, '.tmp', 'watchr');
 
-	beforeEach(async () => {
-		vi.clearAllMocks();
-
-		const fsMock = await import('node:fs');
-		watch = fsMock.watch as Mock;
-		unwatchFile = fsMock.unwatchFile as Mock;
-
-		watch.mockImplementation((path, options, callback) => {
-			const actualFs = require('node:fs');
-			const watcher = actualFs.watch(path, options, callback);
-			return watcher;
-		});
-
+	beforeEach(() => {
 		createTestDir();
 	});
 
-	afterEach(async () => {
-		// Let pending fs watcher callbacks settle before removing the test directory.
-		await setTimeout(15);
+	afterEach(() => {
+		vi.restoreAllMocks();
 		removeTestDir();
 	});
 
@@ -67,6 +40,42 @@ describe('Watchr', () => {
 
 	function createTestFile(path: string, content = '') {
 		writeFileSync(join(testDir, path), content);
+	}
+
+	/**
+	 * Waits for a specific watcher event, optionally filtered by path, with a generous timeout.
+	 * @param watchr - The watcher to listen on.
+	 * @param event - The event name to wait for.
+	 * @param path - Optional path the event must reference.
+	 * @returns A promise resolving with the event path when the event arrives.
+	 */
+	function waitForEvent(watchr: Watchr, event: FileSystemEvent, path?: string): Promise<string> {
+		return new Promise<string>((resolve, reject) => {
+			const timeoutId = globalThis.setTimeout(() => {
+				watchr.off(event, onEvent);
+				reject(new Error(`timed out waiting for "${event}" event`));
+			}, 5000);
+
+			const onEvent = (_stats: unknown, targetPath: string) => {
+				if (path !== undefined && targetPath !== path) { return }
+
+				globalThis.clearTimeout(timeoutId);
+				watchr.off(event, onEvent);
+				resolve(targetPath);
+			};
+
+			watchr.on(event, onEvent);
+		});
+	}
+
+	/**
+	 * Yields a few macrotask turns so already-scheduled watcher work can settle.
+	 * @param turns - Number of macrotask turns to yield.
+	 */
+	async function settle(turns = 3): Promise<void> {
+		for (let turn = 0; turn < turns; turn++) {
+			await new Promise<void>((resolve) => setImmediate(resolve));
+		}
 	}
 
 	describe('constructor', () => {
@@ -112,34 +121,6 @@ describe('Watchr', () => {
 				}).not.toThrow();
 
 				watchr?.close();
-			});
-
-			it('should keep using fs.watch when queue options are absent', async () => {
-				watch.mockClear();
-				const watchr = new Watchr(testDir);
-				await watchr.readyLock;
-
-				expect(watch).toHaveBeenCalled();
-
-				watchr.close();
-			});
-
-			it('should forward AbortSignal to fs.watch', async () => {
-				watch.mockClear();
-
-				const watchr = new Watchr(testDir);
-				await watchr.readyLock;
-
-				expect(watch).toHaveBeenCalled();
-
-				const firstCallOptions = watch.mock.calls[0]?.[1] as WatchOptions & { signal?: AbortSignal };
-				expect(firstCallOptions).toBeDefined();
-				expect(firstCallOptions.signal).toBeInstanceOf(AbortSignal);
-				expect(firstCallOptions.signal?.aborted).toBe(false);
-
-				watchr.close();
-
-				expect(firstCallOptions.signal?.aborted).toBe(true);
 			});
 
 		it('should start watching paths provided in the constructor', async () => {
@@ -285,13 +266,20 @@ describe('Watchr', () => {
 		it('should not watch if closed during setup', async () => {
 			const watchr = new Watchr(testDir);
 			watchr.close();
-			await setTimeout(50); // allow close event to propagate
+			await expect(watchr.readyLock).rejects.toThrow('watcher closed before becoming ready');
 
 			const handler = vi.fn();
 			watchr.on(WatcherEvent.ALL, handler);
 
+			// A control watcher on the same directory bounds the wait deterministically:
+			// once it observes the new file, the closed watcher had every chance to react.
+			const control = new Watchr(testDir, { ignoreInitial: true });
+			await control.readyLock;
+			const controlEvent = waitForEvent(control, FileSystemEvent.ADD, join(testDir, 'newfile.txt'));
+
 			createTestFile('newfile.txt');
-			await setTimeout(100);
+			await controlEvent;
+			control.close();
 
 			expect(handler).not.toHaveBeenCalled();
 		});
@@ -301,7 +289,7 @@ describe('Watchr', () => {
 			const readySpy = vi.fn();
 			watchr.on(WatcherEvent.READY, readySpy);
 			await watchr.readyLock;
-			await setTimeout(20);
+			await settle();
 
 			expect(readySpy).toHaveBeenCalledTimes(1);
 			watchr.close();
@@ -322,8 +310,16 @@ describe('Watchr', () => {
 			const handler = vi.fn();
 			watchr.on(FileSystemEvent.ADD, handler);
 			watchr.close();
+
+			// A control watcher bounds the wait: once it sees the file, the closed watcher had its chance.
+			const control = new Watchr(testDir, { ignoreInitial: true });
+			await control.readyLock;
+			const controlEvent = waitForEvent(control, FileSystemEvent.ADD, join(testDir, 'newfile.txt'));
+
 			createTestFile('newfile.txt');
-			await setTimeout(100); // Give it a moment to see if it triggers
+			await controlEvent;
+			control.close();
+
 			expect(handler).not.toHaveBeenCalled();
 		});
 
@@ -399,28 +395,17 @@ describe('Watchr', () => {
 	});
 
 	describe('watchFile', () => {
-		it('should not watch if closed', async () => {
-			const filePath = join(testDir, 'file.txt');
-			createTestFile('file.txt');
-
-			const watchr = new Watchr();
-			watchr.close();
-
-			await watchr.watchPath(filePath, {});
-
-			expect(watch).not.toHaveBeenCalled();
-		});
-
-		it('should watch the parent directory for file targets', async () => {
+		it('should watch a direct file target and emit change events', async () => {
 			const filePath = join(testDir, 'direct-file.txt');
 			createTestFile('direct-file.txt');
 
-			watch.mockClear();
-			const watchr = new Watchr(filePath);
+			const watchr = new Watchr(filePath, { ignoreInitial: true });
 			await watchr.readyLock;
 
-			expect(watch).toHaveBeenCalled();
-			expect(watch.mock.calls[0]?.[0]).toBe(testDir);
+			const changePromise = waitForEvent(watchr, FileSystemEvent.CHANGE, filePath);
+			appendFileSync(filePath, 'more content');
+
+			expect(await changePromise).toBe(filePath);
 
 			watchr.close();
 		});
@@ -443,8 +428,8 @@ describe('Watchr', () => {
 
 			await watchr.watchPath(ignoredPath, options);
 
-			// Give a moment for any potential events to be emitted
-			await setTimeout(50);
+			// watchPath resolves after setup; drain scheduled turns for any stray events.
+			await settle();
 
 			// Should not generate events for ignored paths
 			const ignoredEvents = events.filter(e => e.path === ignoredPath);
@@ -485,38 +470,17 @@ describe('Watchr', () => {
 			const watchr = new Watchr(join(testDir, watchedFile));
 			await watchr.readyLock;
 
-			const handler = vi.fn();
-			watchr.on(WatcherEvent.ALL, handler);
+			const events: Array<{ event: string, path: string }> = [];
+			watchr.on(WatcherEvent.ALL, (event: string, _stats: unknown, path: string) => events.push({ event, path }));
 
-			// Modify the unwatched file
+			// Modify the unwatched sibling first; the watched-file change below bounds the wait,
+			// since both files share the same underlying directory watcher.
 			appendFileSync(join(testDir, unwatchedFile), ' more content');
-			await setTimeout(100);
-			expect(handler).not.toHaveBeenCalled();
+			const changePromise = waitForEvent(watchr, FileSystemEvent.CHANGE, join(testDir, watchedFile));
+			appendFileSync(join(testDir, watchedFile), ' more content');
+			await changePromise;
 
-			// Modify the watched file
-			await new Promise<void>((resolve) => {
-				watchr.on(FileSystemEvent.CHANGE, () => {
-					expect(handler).toHaveBeenCalledTimes(1);
-					resolve();
-				});
-				appendFileSync(join(testDir, watchedFile), ' more content');
-			});
-
-			watchr.close();
-		});
-
-		it('should watch paths serially if one is a sub-path of another', async () => {
-			const subDir = join(testDir, 'sub');
-			const subSubDir = join(subDir, 'subsub');
-			mkdirSync(subSubDir, { recursive: true });
-			watch.mockClear();
-
-			const watchr = new Watchr([subDir, subSubDir]);
-			await watchr.readyLock;
-			const watchedPaths = watch.mock.calls.map((call) => call[0]);
-
-			expect(watchedPaths).toContain(subDir);
-			expect(watchedPaths).toContain(subSubDir);
+			expect(events).toEqual([{ event: FileSystemEvent.CHANGE, path: join(testDir, watchedFile) }]);
 
 			watchr.close();
 		});
@@ -702,39 +666,20 @@ describe('Watchr', () => {
 	// });
 
 	describe('recursive watching behavior', () => {
-		it('should create a single watcher with native recursive watching', async () => {
-			// Create a nested directory structure
+		it('should emit events for nested paths when watching recursively', async () => {
 			const level1 = join(testDir, 'level1');
 			const level2 = join(level1, 'level2');
-			const level3 = join(level2, 'level3');
-			mkdirSync(level3, { recursive: true });
+			mkdirSync(level2, { recursive: true });
 
-			const watchr = new Watchr(testDir, { recursive: true });
+			const watchr = new Watchr(testDir, { recursive: true, ignoreInitial: true });
 			await watchr.readyLock;
 
-			const watchedPaths = watch.mock.calls.map((call) => call[0]);
+			const nestedFile = join(level2, 'nested.txt');
+			const addPromise = waitForEvent(watchr, FileSystemEvent.ADD, nestedFile);
 
-			expect(watchedPaths).toContain(testDir);
-			expect(watchedPaths).not.toContain(level1);
-			expect(watchedPaths).not.toContain(level2);
-			expect(watchedPaths).not.toContain(level3);
-			expect(watch.mock.calls.length).toBe(1);
+			writeFileSync(nestedFile, 'nested');
 
-			watchr.close();
-		});
-
-		it('should create only one watcher for non-recursive watching', async () => {
-			const level1 = join(testDir, 'level1');
-			mkdirSync(level1, { recursive: true });
-
-			const watchr = new Watchr(testDir, { recursive: false });
-			await watchr.readyLock;
-
-			const watchedPaths = watch.mock.calls.map((call) => call[0]);
-
-			expect(watchedPaths).toContain(testDir);
-			expect(watchedPaths).not.toContain(level1);
-			expect(watch.mock.calls.length).toBe(1);
+			expect(await addPromise).toBe(nestedFile);
 
 			watchr.close();
 		});

@@ -8,6 +8,25 @@ import type { DirectoryReadOptions, NodeError, NodeErrorCode, Stats } from './@t
 
 const retryErrorCodes: Set<NodeErrorCode> = new Set([ 'EMFILE', 'ENFILE', 'EAGAIN', 'EBUSY', 'EACCESS', 'EACCES', 'EACCS', 'EPERM' ]);
 const recursiveReadUnsupportedErrorCodes = new Set([ 'ERR_INVALID_ARG_VALUE', 'ERR_INVALID_OPT_VALUE' ]);
+const maxConcurrentDirectoryReads = 8;
+
+/**
+ * Runs an async task over items with bounded concurrency using a shared-index worker pool.
+ * @param items - The items to process.
+ * @param task - The async task to run for each item.
+ * @returns A promise that resolves when all items are processed.
+ */
+const runWithBoundedConcurrency = async <T>(items: T[], task: (item: T) => Promise<void>): Promise<void> => {
+	let nextIndex = 0;
+
+	const workers = Array.from({ length: Math.min(maxConcurrentDirectoryReads, items.length) }, async () => {
+		while (nextIndex < items.length) {
+			await task(items[nextIndex++]!);
+		}
+	});
+
+	await Promise.all(workers);
+};
 
 /**
  * Checks if the error is a Node.js error.
@@ -24,7 +43,7 @@ export class FileSystem {
 	private static readonly maxStatRetries = 10;
 
 	private constructor () {
-		throw new Error('This class cannot be instantiated');
+		throw new Error('🚨 This class cannot be instantiated');
 	}
 
 	/**
@@ -94,7 +113,8 @@ export class FileSystem {
 				}
 
 				if (subdirectoriesToProcess.length > 0) {
-					await Promise.all(subdirectoriesToProcess.map((subPath) => populateResultFromPath(subPath)));
+					// Per-level bounded workers cap fanout without deadlocking on recursion.
+					await runWithBoundedConcurrency(subdirectoriesToProcess, populateResultFromPath);
 				}
 			};
 
@@ -113,10 +133,11 @@ export class FileSystem {
 	/**
 	 * Gets the stats for a file or directory.
 	 * @param targetPath - The path to the file or directory.
+	 * @param signal - Abort signal supplied by the timeout decorator; stops retrying once aborted.
 	 * @returns A promise that resolves to the stats object or undefined if not found.
 	 */
 	@timeout()
-	static async getStats(targetPath: string): Promise<Stats | undefined> {
+	static async getStats(targetPath: string, signal?: AbortSignal): Promise<Stats | undefined> {
 		let retries = 0;
 
 		/**
@@ -129,9 +150,14 @@ export class FileSystem {
 
 			if (retries >= FileSystem.maxStatRetries) { return }
 
+			// The decorator already returned undefined to the caller; further retries are discarded work.
+			if (signal?.aborted) { return }
+
 			retries++;
 
 			await setAsyncTimeout(~~(Math.random() * 100));
+
+			if (signal?.aborted) { return }
 
 			return getStatsWithTimeout(targetPath);
 		};

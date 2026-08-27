@@ -30,7 +30,7 @@ describe('utils', () => {
 			for (const input of inputs) {
 				const result = castError(input);
 				expect(result).toBeInstanceOf(Error);
-				expect(result.message).toBe('Unknown error');
+				expect(result.message).toBe('🚨 Unknown error');
 			}
 		});
 	});

@@ -1,44 +1,59 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { Watchr } from '../src/watchr';
-import { writeFileSync, mkdirSync, rmSync, existsSync } from 'node:fs';
+import { writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { setTimeout as setTimeoutPromise } from 'node:timers/promises';
+
+/**
+ * Collects events until all expected paths are seen or the deadline passes
+ * @param register Registers the event listener, invoking the callback with each observed path
+ * @param expectedPaths The set of paths that must all be observed
+ * @param timeoutMs Maximum time to wait before rejecting
+ * @returns A promise resolving to the observed paths in arrival order
+ */
+function collectPaths(register: (onPath: (path: string) => void) => void, expectedPaths: readonly string[], timeoutMs: number = 5000): Promise<string[]> {
+	return new Promise<string[]>((resolve, reject) => {
+		const observed: string[] = [];
+		const remaining = new Set(expectedPaths);
+
+		const timeout = setTimeout(() => {
+			reject(new Error(`timed out after ${timeoutMs}ms; missing paths: ${[ ...remaining ].join(', ')}`));
+		}, timeoutMs);
+
+		register((path) => {
+			observed.push(path);
+			remaining.delete(path);
+
+			if (remaining.size === 0) {
+				clearTimeout(timeout);
+				resolve(observed);
+			}
+		});
+	});
+}
 
 describe('Race Condition Fixes', () => {
-	const testDir = './test-race-conditions-temp';
+	let testDir: string;
 
 	beforeEach(() => {
-		// Clean up any existing test directory
-		if (existsSync(testDir)) {
-			rmSync(testDir, { recursive: true, force: true });
-		}
-		mkdirSync(testDir, { recursive: true });
+		testDir = mkdtempSync(join(tmpdir(), 'watchr-race-'));
 	});
 
 	afterEach(() => {
-		// Clean up test directory
-		if (existsSync(testDir)) {
-			rmSync(testDir, { recursive: true, force: true });
-		}
+		rmSync(testDir, { recursive: true, force: true });
 	});
 
 	it('should handle multiple watchers on the same path without race conditions', async () => {
 		const watchers: Watchr[] = [];
-		const readyPromises: Promise<void>[] = [];
 
 		try {
 			// Create multiple watchers simultaneously
 			for (let i = 0; i < 3; i++) {
-				const watcher = new Watchr(testDir);
-				watchers.push(watcher);
-
-				readyPromises.push(new Promise<void>((resolve) => {
-					watcher.on('ready', () => resolve());
-				}));
+				watchers.push(new Watchr(testDir));
 			}
 
 			// Wait for all watchers to be ready
-			await Promise.all(readyPromises);
+			await Promise.all(watchers.map((watcher) => watcher.readyLock));
 
 			// All watchers should be ready without errors
 			expect(watchers.length).toBe(3);
@@ -57,61 +72,32 @@ describe('Race Condition Fixes', () => {
 	});
 
 	it('should handle rapid file operations without race conditions', async () => {
-		const watcher = new Watchr(testDir);
-		const events: string[] = [];
-		let eventPromiseResolve: () => void;
-		const eventPromise = new Promise<void>((resolve) => {
-			eventPromiseResolve = resolve;
-		});
+		const watcher = new Watchr(testDir, { ignoreInitial: true });
+		const expectedFiles = Array.from({ length: 5 }, (_unused, i) => join(testDir, `test-${i}.txt`));
 
 		try {
-			// Wait for watcher to be ready
-			await new Promise<void>((resolve) => {
-				watcher.on('ready', () => resolve());
-			});
+			await watcher.readyLock;
 
-			// Listen for events
-			watcher.on('add', (stats, path) => {
-				events.push(`add:${path}`);
-				if (events.length >= 1) {
-					eventPromiseResolve();
-				}
-			});
+			const addsPromise = collectPaths((onPath) => {
+				watcher.on('add', (_stats, path: string) => onPath(path));
+			}, expectedFiles);
 
-			// Create multiple files rapidly
-			const filePromises: Promise<void>[] = [];
-			for (let i = 0; i < 5; i++) {
-				filePromises.push(
-					setTimeoutPromise(i * 50).then(() => {
-						const testFile = join(testDir, `test-${i}.txt`);
-						writeFileSync(testFile, `content-${i}`);
-					})
-				);
+			// Create all files back to back with no artificial staggering
+			for (const [ i, testFile ] of expectedFiles.entries()) {
+				writeFileSync(testFile, `content-${i}`);
 			}
 
-			await Promise.all(filePromises);
-
-			// Wait for at least one event or timeout after 1 second
-			const timeoutPromise = setTimeoutPromise(1000).then(() => {
-				throw new Error('Timeout waiting for file events');
-			});
-
-			try {
-				await Promise.race([eventPromise, timeoutPromise]);
-				// Should have detected at least one file addition
-				expect(events.length).toBeGreaterThan(0);
-			} catch (error) {
-				// If no events were detected, that's also valid behavior -
-				// the watcher might be configured to ignore initial events
-				// or the file system might not emit events immediately
-				expect(events.length).toBeGreaterThanOrEqual(0);
-			}
+			const observed = await addsPromise;
+			expect(new Set(observed)).toEqual(new Set(expectedFiles));
+			expect(observed.length).toBe(expectedFiles.length);
 		} finally {
 			if (!watcher.isClosed()) {
 				watcher.close();
 			}
 		}
-	});	it('should handle watcher lifecycle without memory leaks', async () => {
+	});
+
+	it('should handle watcher lifecycle without memory leaks', async () => {
 		const watchers: Watchr[] = [];
 
 		try {
@@ -120,9 +106,7 @@ describe('Race Condition Fixes', () => {
 				const watcher = new Watchr(testDir);
 				watchers.push(watcher);
 
-				await new Promise<void>((resolve) => {
-					watcher.on('ready', () => resolve());
-				});
+				await watcher.readyLock;
 
 				watcher.close();
 				expect(watcher.isClosed()).toBe(true);
@@ -143,20 +127,28 @@ describe('Race Condition Fixes', () => {
 	});
 
 	it('should handle constructor error scenarios gracefully', async () => {
-		const nonExistentPath = './non-existent-path-that-should-not-exist';
+		const nonExistentPath = join(testDir, 'non-existent-path-that-should-not-exist');
 		const watcher = new Watchr(nonExistentPath);
 		const errors: Error[] = [];
-		watcher.on('error', (error: Error) => errors.push(error));
+
+		const errorPromise = new Promise<Error>((resolve, reject) => {
+			const timeout = setTimeout(() => reject(new Error('timed out waiting for error event')), 5000);
+
+			watcher.once('error', (error: Error) => {
+				clearTimeout(timeout);
+				errors.push(error);
+				resolve(error);
+			});
+		});
 
 		try {
 			// Should not throw immediately
 			expect(watcher).toBeDefined();
 			expect(watcher.isClosed()).toBe(false);
 
-			// Wait a bit to see if any errors occur
-			await setTimeoutPromise(100);
-
-			// Error should have been emitted (not thrown) for the non-existent path
+			// Error should be emitted (not thrown) for the non-existent path
+			const emittedError = await errorPromise;
+			expect(emittedError).toBeInstanceOf(Error);
 			expect(errors.length).toBeGreaterThan(0);
 			// Watcher should still be valid after an error (not closed)
 			expect(watcher.isClosed()).toBe(false);
@@ -171,9 +163,7 @@ describe('Race Condition Fixes', () => {
 		const watcher = new Watchr(testDir);
 
 		try {
-			await new Promise<void>((resolve) => {
-				watcher.on('ready', () => resolve());
-			});
+			await watcher.readyLock;
 
 			// Check that abort signal is properly initialized
 			expect(watcher.abortSignal).toBeDefined();

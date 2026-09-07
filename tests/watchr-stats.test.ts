@@ -47,6 +47,7 @@ describe('WatchrStats', () => {
 			expect(watchrStats.isFile()).toBe(true);
 			expect(watchrStats.isDirectory()).toBe(false);
 			expect(watchrStats.isSymbolicLink()).toBe(false);
+			expect(watchrStats.isSynthetic).toBe(false);
 		});
 
 		it('should handle inode numbers larger than Number.MAX_SAFE_INTEGER', () => {

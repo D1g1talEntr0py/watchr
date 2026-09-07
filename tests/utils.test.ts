@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { castError, noop } from '../src/utils';
+import { addJavaScriptExtension } from '../build/extension-utils';
+import { castError, noop, raceWithAbort } from '../src/utils';
 
 describe('utils', () => {
 	describe('noop', () => {
@@ -32,6 +33,32 @@ describe('utils', () => {
 				expect(result).toBeInstanceOf(Error);
 				expect(result.message).toBe('Unknown error');
 			}
+		});
+	});
+
+	describe('raceWithAbort', () => {
+		it('should return the promise result when it resolves first', async () => {
+			await expect(raceWithAbort(Promise.resolve('result'))).resolves.toBe('result');
+		});
+
+		it('should reject with the abort reason when the signal aborts first', async () => {
+			const abortController = new AbortController();
+			const promise = raceWithAbort(new Promise(() => {}), abortController.signal);
+
+			abortController.abort();
+
+			await expect(promise).rejects.toMatchObject({ name: 'AbortError' });
+		});
+	});
+
+	describe('addJavaScriptExtension', () => {
+		it.each([
+			[ './module', './module.js' ],
+			[ './module.js', './module.js' ],
+			[ './data.json', './data.json' ],
+			[ './native.node', './native.node' ]
+		])('should rewrite %s as %s', (modulePath, expectedPath) => {
+			expect(addJavaScriptExtension(modulePath)).toBe(expectedPath);
 		});
 	});
 });

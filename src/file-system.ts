@@ -5,28 +5,12 @@ import { timeout } from './decorators/timeout';
 import { FileSystemEntries } from './file-system-entries';
 import { setTimeout as setAsyncTimeout } from 'node:timers/promises';
 import type { DirectoryReadOptions, NodeError, NodeErrorCode, Stats } from './@types/index';
+import { raceWithAbort } from './utils';
 
+const maxConcurrentDirectoryReads = 8;
+const missingStat = Symbol('missing-stat');
 const retryErrorCodes: Set<NodeErrorCode> = new Set([ 'EMFILE', 'ENFILE', 'EAGAIN', 'EBUSY', 'EACCESS', 'EACCES', 'EACCS', 'EPERM' ]);
 const recursiveReadUnsupportedErrorCodes = new Set([ 'ERR_INVALID_ARG_VALUE', 'ERR_INVALID_OPT_VALUE' ]);
-const maxConcurrentDirectoryReads = 8;
-
-/**
- * Runs an async task over items with bounded concurrency using a shared-index worker pool.
- * @param items - The items to process.
- * @param task - The async task to run for each item.
- * @returns A promise that resolves when all items are processed.
- */
-const runWithBoundedConcurrency = async <T>(items: T[], task: (item: T) => Promise<void>): Promise<void> => {
-	let nextIndex = 0;
-
-	const workers = Array.from({ length: Math.min(maxConcurrentDirectoryReads, items.length) }, async () => {
-		while (nextIndex < items.length) {
-			await task(items[nextIndex++]!);
-		}
-	});
-
-	await Promise.all(workers);
-};
 
 /**
  * Checks if the error is a Node.js error.
@@ -43,7 +27,7 @@ export class FileSystem {
 	private static readonly maxStatRetries = 10;
 
 	private constructor () {
-		throw new Error('🚨 This class cannot be instantiated');
+		throw new Error('This class cannot be instantiated');
 	}
 
 	/**
@@ -52,22 +36,26 @@ export class FileSystem {
 	 * @param param1 - Options for reading the directory.
 	 * @returns A promise that resolves to a FileSystemEntries object containing the directory contents.
 	 */
-	static async readDirectory(rootPath: string, { ignore = () => false, signal }: DirectoryReadOptions = {}): Promise<FileSystemEntries> {
+	static async readDirectory(rootPath: string, { ignore, recursive = true, signal }: DirectoryReadOptions & { recursive?: boolean } = {}): Promise<FileSystemEntries> {
 		const fileSystemEntries = new FileSystemEntries();
 
+		if (signal?.aborted) { return fileSystemEntries }
+
+		const shouldIgnore = ignore ?? (() => false);
 		rootPath = normalize(rootPath);
 
-		const readWithNativeRecursion = async (): Promise<boolean> => {
+		const readWithNativeRecursion = async () => {
 			try {
-				const entries = await readdir(rootPath, { recursive: true, withFileTypes: true });
+				if (signal?.aborted) { return true }
+
+				const entries = await readdir(rootPath, { recursive, withFileTypes: true });
 
 				for (const entry of entries) {
 					if (signal?.aborted) { break }
 
-					const parentPath = typeof entry.parentPath === 'string' ? entry.parentPath : rootPath;
-					const subPath = normalize(join(parentPath, entry.name));
+					const subPath = normalize(join(typeof entry.parentPath === 'string' ? entry.parentPath : rootPath, entry.name));
 
-					if (ignore(subPath)) { continue }
+					if (shouldIgnore(subPath)) { continue }
 
 					if (entry.isDirectory()) {
 						fileSystemEntries.addDirectory(subPath);
@@ -89,43 +77,39 @@ export class FileSystem {
 		};
 
 		const readWithManualTraversal = async () => {
-			const visited = new Set<string>([ rootPath ]);
+			const pendingDirectories = [ rootPath ];
 
-			const populateResultFromPath = async (currentPath: string) => {
-				if (signal?.aborted) { return }
+			const readNextDirectory = async () => {
+				while (!signal?.aborted) {
+					const currentPath = pendingDirectories.shift();
+					if (currentPath === undefined) { return }
 
-				const subPathPrefix = `${currentPath}${currentPath === sep ? '' : sep}`;
-				const subdirectoriesToProcess: string[] = [];
+					if (signal?.aborted) { return }
+					const subPathPrefix = `${currentPath}${currentPath === sep ? '' : sep}`;
+					const entries = await readdir(currentPath, { withFileTypes: true });
 
-				for (const directoryEntry of await readdir(currentPath, { withFileTypes: true })) {
-					const subPath = `${subPathPrefix}${directoryEntry.name}`;
+					for (const directoryEntry of entries) {
+						if (signal?.aborted) { return }
 
-					if (ignore(subPath) || visited.has(subPath)) { continue }
+						const subPath = normalize(`${subPathPrefix}${directoryEntry.name}`);
+						if (shouldIgnore(subPath)) { continue }
 
-					visited.add(subPath);
-
-					if (directoryEntry.isDirectory()) {
-						fileSystemEntries.addDirectory(subPath);
-						subdirectoriesToProcess.push(subPath);
-					} else if (directoryEntry.isFile()) {
-						fileSystemEntries.addFile(subPath);
+						if (directoryEntry.isDirectory()) {
+							fileSystemEntries.addDirectory(subPath);
+							if (recursive) { pendingDirectories.push(subPath) }
+						} else if (directoryEntry.isFile()) {
+							fileSystemEntries.addFile(subPath);
+						}
 					}
-				}
-
-				if (subdirectoriesToProcess.length > 0) {
-					// Per-level bounded workers cap fanout without deadlocking on recursion.
-					await runWithBoundedConcurrency(subdirectoriesToProcess, populateResultFromPath);
 				}
 			};
 
-			await populateResultFromPath(rootPath);
+			await Promise.all(Array.from({ length: maxConcurrentDirectoryReads }, readNextDirectory));
 		};
 
-		const nativeRecursiveReadUsed = await readWithNativeRecursion();
+		const nativeRecursiveReadUsed = ignore === undefined && await readWithNativeRecursion();
 
-		if (!nativeRecursiveReadUsed) {
-			await readWithManualTraversal();
-		}
+		if (!nativeRecursiveReadUsed) { await readWithManualTraversal() }
 
 		return signal?.aborted ? fileSystemEntries.reset() : fileSystemEntries;
 	}
@@ -134,53 +118,88 @@ export class FileSystem {
 	 * Gets the stats for a file or directory.
 	 * @param targetPath - The path to the file or directory.
 	 * @param signal - Abort signal supplied by the timeout decorator; stops retrying once aborted.
-	 * @returns A promise that resolves to the stats object or undefined if not found.
+	 * @returns A promise that resolves to the stats object, undefined for confirmed absence, or rejects for an indeterminate result.
+	 */
+	static async getStats(targetPath: string, signal?: AbortSignal): Promise<Stats | undefined> {
+		const result = signal === undefined
+			? await FileSystem.getStatsWithTimeout(targetPath)
+			: await FileSystem.getStatsWithTimeout(targetPath, signal);
+
+		if (result === missingStat) { return undefined }
+
+		if (result === undefined) {
+			if (signal?.aborted) { throw new DOMException('The operation was aborted', 'AbortError') }
+
+			throw new Error('🚨 Stat operation timed out');
+		}
+
+		return result;
+	}
+
+	/**
+	 * Gets stats with a bounded timeout while preserving confirmed absence separately from timeout.
+	 * @param targetPath - The path to the file or directory.
+	 * @param signal - Optional caller cancellation signal.
+	 * @returns Stats, the missing sentinel, or undefined when the timeout/cancellation wins.
 	 */
 	@timeout()
-	static async getStats(targetPath: string, signal?: AbortSignal): Promise<Stats | undefined> {
+	private static async getStatsWithTimeout(targetPath: string, signal?: AbortSignal): Promise<Stats | typeof missingStat | undefined> {
 		let retries = 0;
 
-		/**
-		 * Handles the rejection of a promise.
-		 * @param error - The error that was thrown.
-		 * @returns A promise that resolves to the stats or undefined.
-		 */
-		const handleRejection = async (error: unknown): Promise<Stats | undefined> => {
-			if (!isNodeError(error) || !retryErrorCodes.has(error.code)) { return }
+		const handleRejection = async (error: unknown): Promise<Stats | typeof missingStat | undefined> => {
+			if (isNodeError(error) && (error.code === 'ENOENT' || error.code === 'ENOTDIR')) { return missingStat }
+			if (!isNodeError(error) || !retryErrorCodes.has(error.code)) { throw error }
 
-			if (retries >= FileSystem.maxStatRetries) { return }
+			if (retries >= FileSystem.maxStatRetries) { throw error }
 
 			// The decorator already returned undefined to the caller; further retries are discarded work.
 			if (signal?.aborted) { return }
 
 			retries++;
 
-			await setAsyncTimeout(~~(Math.random() * 100));
+			try {
+				await setAsyncTimeout(~~(Math.random() * 100), { signal });
+			} catch (sleepError: unknown) {
+				if (signal?.aborted) { return }
+
+				throw sleepError;
+			}
 
 			if (signal?.aborted) { return }
 
-			return getStatsWithTimeout(targetPath);
+			return getStatsWithTimeout(targetPath, signal);
 		};
 
 		/**
 		 * Gets the stats for a file or directory with a timeout.
 		 * @param targetPath - The path to the file or directory.
+		 * @param requestSignal - Signal used for this individual retry attempt.
 		 * @returns A promise that resolves to the stats or undefined if not found.
 		 */
-		const getStatsWithTimeout = async (targetPath: string): Promise<Stats | undefined> => {
+		const getStatsWithTimeout = async (targetPath: string, requestSignal: AbortSignal | undefined = signal): Promise<Stats | typeof missingStat | undefined> => {
 			// Each attempt takes its own queue slot so retries stay throttled under descriptor pressure.
-			const clearQueue = await FileSystem.retryQueue.schedule<Stats>();
-
 			try {
-				return clearQueue(await stat(targetPath, { bigint: true }));
-			} catch (error: unknown) {
-				clearQueue();
+				using _queueLease = await FileSystem.retryQueue.schedule<Stats>(requestSignal);
 
+				if (requestSignal?.aborted) { return }
+
+				const result = await raceWithAbort(stat(targetPath, { bigint: true }), requestSignal);
+
+				if (requestSignal?.aborted) { return }
+
+				return result;
+			} catch (error: unknown) {
 				return handleRejection(error);
 			}
 		};
 
-		return getStatsWithTimeout(targetPath);
+		try {
+			return await getStatsWithTimeout(targetPath);
+		} catch (error: unknown) {
+			if (signal?.aborted) { return }
+
+			throw error;
+		}
 	}
 
 	/**

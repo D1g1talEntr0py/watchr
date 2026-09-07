@@ -150,8 +150,9 @@ describe('Race Condition Fixes', () => {
 			const emittedError = await errorPromise;
 			expect(emittedError).toBeInstanceOf(Error);
 			expect(errors.length).toBeGreaterThan(0);
-			// Watcher should still be valid after an error (not closed)
-			expect(watcher.isClosed()).toBe(false);
+			// Initialization failures are terminal after resources are rolled back.
+			expect(watcher.isClosed()).toBe(true);
+			await expect(watcher.readyLock).rejects.toThrow('Path not found');
 		} finally {
 			if (!watcher.isClosed()) {
 				watcher.close();

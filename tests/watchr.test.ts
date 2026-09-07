@@ -217,6 +217,15 @@ describe('Watchr', () => {
 			watchr.close();
 		});
 
+		it('should reject readyLock when startup fails', async () => {
+			const watchr = new Watchr(join(testDir, 'missing-startup-root'));
+			watchr.on(WatcherEvent.ERROR, vi.fn());
+
+			await expect(watchr.readyLock).rejects.toThrow('Path not found');
+			expect(watchr.isReady()).toBe(false);
+			watchr.close();
+		});
+
 		it('should emit an error for unsupported file types', async () => {
 			const unsupportedPath = join(testDir, 'unsupported-file');
 			createTestFile('unsupported-file');
@@ -344,6 +353,31 @@ describe('Watchr', () => {
 			expect(closeSpy).toHaveBeenCalledTimes(1); // Should not be called again
 		});
 
+		it('should dispose through Symbol.dispose', async () => {
+			const watchr = new Watchr(testDir);
+			await watchr.readyLock;
+			const closeSpy = vi.fn();
+
+			watchr.on(WatcherEvent.CLOSE, closeSpy);
+			watchr[Symbol.dispose]();
+
+			expect(watchr.isClosed()).toBe(true);
+			expect(watchr.abortSignal.aborted).toBe(true);
+			expect(closeSpy).toHaveBeenCalledTimes(1);
+		});
+
+		it('should not emit "close" more than once when disposed after close', async () => {
+			const watchr = new Watchr(testDir);
+			await watchr.readyLock;
+			const closeSpy = vi.fn();
+
+			watchr.on(WatcherEvent.CLOSE, closeSpy);
+			watchr.close();
+			watchr[Symbol.dispose]();
+
+			expect(closeSpy).toHaveBeenCalledTimes(1);
+		});
+
 		it('should ignore manual emits after close', async () => {
 			const watchr = new Watchr();
 			await watchr.readyLock;
@@ -359,9 +393,50 @@ describe('Watchr', () => {
 
 			expect(allSpy).toHaveBeenCalledTimes(1);
 		});
+
+		it('should mark fallback directory stats as synthetic and use Unix time', async () => {
+			const watchr = new Watchr();
+			await watchr.readyLock;
+			const before = Date.now();
+			const statsPromise = new Promise<unknown>((resolve) => watchr.once(FileSystemEvent.ADD_DIR, resolve));
+
+			watchr.emitEvent(FileSystemEvent.ADD_DIR, join(testDir, 'synthetic-directory'));
+
+			const stats = await statsPromise as { isSynthetic: boolean, isFile: () => boolean, isDirectory: () => boolean, modifiedTimeMs: number };
+			expect(stats.isSynthetic).toBe(true);
+			expect(stats.isFile()).toBe(false);
+			expect(stats.isDirectory()).toBe(true);
+			expect(stats.modifiedTimeMs).toBeGreaterThanOrEqual(before);
+			expect(stats.modifiedTimeMs).toBeLessThanOrEqual(Date.now());
+			watchr.close();
+		});
 	});
 
 	describe('watch behavior', () => {
+		it('should serialize watcher tasks and recover after a rejection', async () => {
+			const watchr = new Watchr([]);
+			const synchronize = (watchr as unknown as { synchronizeWatchers: (callback: () => Promise<void>) => Promise<void> }).synchronizeWatchers.bind(watchr);
+			let releaseFirst!: () => void;
+			const first = new Promise<void>((resolve) => { releaseFirst = resolve; });
+			const order: string[] = [];
+
+			const firstTask = synchronize(async () => {
+				order.push('first-start');
+				await first;
+				order.push('first-end');
+			});
+			const secondTask = synchronize(async () => { order.push('second'); });
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			expect(order).toEqual([ 'first-start' ]);
+			releaseFirst();
+			await Promise.all([ firstTask, secondTask ]);
+
+			await expect(synchronize(async () => { throw new Error('task failed'); })).rejects.toThrow('task failed');
+			await expect(synchronize(async () => { order.push('after-rejection'); })).resolves.toBeUndefined();
+			expect(order).toContain('after-rejection');
+			watchr.close();
+		});
+
 		it('should emit an error when a user event handler throws', async () => {
 			const throwingHandler = vi.fn(() => {
 				throw new Error('handler exploded');
@@ -458,6 +533,18 @@ describe('Watchr', () => {
 			expect(error).toBeInstanceOf(Error);
 			expect(error.message).toBe('🚨 ignore callback failed.');
 
+			watchr.close();
+		});
+
+		it('should emit a safe error when a nested ignore callback throws', async () => {
+			const options = {
+				ignore: [ 'ignored.txt', () => { throw new Error('nested ignore exploded'); } ],
+			};
+			const watchr = new Watchr([]);
+			const errorPromise = new Promise<Error>((resolve) => watchr.once(WatcherEvent.ERROR, resolve));
+
+			await watchr.watchPath(join(testDir, 'callback-array-throw.txt'), options);
+			await expect(errorPromise).resolves.toMatchObject({ message: '🚨 ignore callback failed.' });
 			watchr.close();
 		});
 

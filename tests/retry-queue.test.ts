@@ -10,13 +10,40 @@ describe('RetryQueue', () => {
   });
 
   describe('schedule', () => {
+    it('should reject without queueing when the signal is already aborted', async () => {
+      const abortController = new AbortController();
+      abortController.abort();
+
+      await expect(retryQueue.schedule(abortController.signal)).rejects.toMatchObject({ name: 'AbortError' });
+      expect(retryQueue['pendingQueue'].size).toBe(0);
+      expect(retryQueue['activeQueue'].size).toBe(0);
+    });
+
     it('should resolve immediately if active queue is not under pressure', async () => {
-      const promise = retryQueue.schedule();
-      const resolveFn = await promise;
+      const promise = retryQueue.schedule<string>();
+      const lease = await promise;
 
       expect(retryQueue['activeQueue'].size).toBe(1);
-      resolveFn();
+      expect(lease('done')).toBe('done');
       expect(retryQueue['activeQueue'].size).toBe(0);
+    });
+
+    it('should remove a canceled task before queue admission', async () => {
+      const currentLimit = fileDescriptorLimit;
+      for (let i = 0; i < currentLimit / 2; i++) {
+        retryQueue['activeQueue'].add(vi.fn());
+      }
+
+      const abortController = new AbortController();
+      const removeEventListenerSpy = vi.spyOn(abortController.signal, 'removeEventListener');
+      const promise = retryQueue.schedule(abortController.signal);
+
+      expect(retryQueue['pendingQueue'].size).toBe(1);
+      abortController.abort();
+
+      await expect(promise).rejects.toMatchObject({ name: 'AbortError' });
+      expect(retryQueue['pendingQueue'].size).toBe(0);
+      expect(removeEventListenerSpy).toHaveBeenCalledWith('abort', expect.any(Function));
     });
 
     it('should add to pending queue if active queue is under pressure', async () => {
@@ -30,6 +57,72 @@ describe('RetryQueue', () => {
       expect(retryQueue['pendingQueue'].size).toBe(1);
       await promise;
       expect(retryQueue['pendingQueue'].size).toBe(0);
+    });
+
+    it('should dispose an admitted lease idempotently', async () => {
+      const lease = await retryQueue.schedule();
+
+      expect(retryQueue['activeQueue'].size).toBe(1);
+      lease.dispose();
+      lease.dispose();
+      lease[Symbol.dispose]();
+
+      expect(retryQueue['activeQueue'].size).toBe(0);
+    });
+
+    it('should retain an admitted lease when the signal aborts until released', async () => {
+      const abortController = new AbortController();
+      const removeEventListenerSpy = vi.spyOn(abortController.signal, 'removeEventListener');
+      const lease = await retryQueue.schedule(abortController.signal);
+
+      expect(retryQueue['activeQueue'].size).toBe(1);
+      abortController.abort();
+      expect(retryQueue['activeQueue'].size).toBe(1);
+      lease.dispose();
+
+      expect(retryQueue['activeQueue'].size).toBe(0);
+      expect(removeEventListenerSpy).toHaveBeenCalledWith('abort', expect.any(Function));
+    });
+
+    it('should release leases on normal and exceptional scope exit', async () => {
+      {
+        using lease = await retryQueue.schedule();
+        expect(typeof lease).toBe('function');
+        expect(retryQueue['activeQueue'].size).toBe(1);
+      }
+      expect(retryQueue['activeQueue'].size).toBe(0);
+
+      await expect((async () => {
+        using lease = await retryQueue.schedule();
+        expect(typeof lease).toBe('function');
+        throw new Error('scope failed');
+      })()).rejects.toThrow('scope failed');
+      expect(retryQueue['activeQueue'].size).toBe(0);
+    });
+
+    it('should not admit canceled pending work on later queue processing', async () => {
+      const currentLimit = fileDescriptorLimit;
+      for (let i = 0; i < currentLimit / 2; i++) {
+        retryQueue['activeQueue'].add(vi.fn());
+      }
+
+      const abortController = new AbortController();
+      const canceledPromise = retryQueue.schedule(abortController.signal);
+      const retainedPromise = retryQueue.schedule();
+
+      expect(retryQueue['pendingQueue'].size).toBe(2);
+      abortController.abort();
+      await expect(canceledPromise).rejects.toMatchObject({ name: 'AbortError' });
+      expect(retryQueue['pendingQueue'].size).toBe(1);
+      expect(retryQueue['intervalId']).toBeDefined();
+
+      retryQueue['activeQueue'].clear();
+      retryQueue['processQueue']();
+      const retainedLease = await retainedPromise;
+
+      expect(retryQueue['pendingQueue'].size).toBe(0);
+      expect(retryQueue['activeQueue'].size).toBe(1);
+      retainedLease.dispose();
     });
   });
 

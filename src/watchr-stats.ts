@@ -25,12 +25,14 @@ export class WatchrStats {
 	private readonly _isDirectory: boolean;
 	/** True if the stats object represents a symbolic link. */
 	private readonly _isSymbolicLink: boolean;
+	private readonly _isSynthetic: boolean;
 
 	/**
 	 * Creates an instance of WatchrStats.
 	 * @param stats - The original stats object to wrap.
+	 * @param isSynthetic - Whether the snapshot is a generated fallback.
 	 */
-	constructor(stats: Stats) {
+	constructor(stats: Stats, isSynthetic = false) {
 		this._inodeNumber = (stats.ino <= Number.MAX_SAFE_INTEGER) ? Number(stats.ino) : stats.ino;
 		this._size = Number(stats.size);
 		this._modifiedTime = WatchrStats.resolveInstant(stats.mtimeInstant, stats.mtimeNs);
@@ -40,6 +42,7 @@ export class WatchrStats {
 		this._isFile = stats.isFile();
 		this._isDirectory = stats.isDirectory();
 		this._isSymbolicLink = stats.isSymbolicLink();
+		this._isSynthetic = isSynthetic;
 	}
 
 	/**
@@ -112,6 +115,14 @@ export class WatchrStats {
 	 */
 	isSymbolicLink(): boolean {
 		return this._isSymbolicLink;
+	}
+
+	/**
+	 * Returns whether this snapshot was synthesized because filesystem metadata was unavailable.
+	 * @returns True for synthetic snapshots, otherwise false.
+	 */
+	get isSynthetic(): boolean {
+		return this._isSynthetic;
 	}
 
 	/**

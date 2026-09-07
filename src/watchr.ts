@@ -1,14 +1,14 @@
 import { watch } from 'node:fs';
-import EventEmitter from 'node:events';
+import { EventEmitter } from 'node:events';
 import { resolve, dirname, basename, matchesGlob } from 'node:path';
 import { FileSystem } from './file-system';
 import { castError, noop, uniqueSortedArray } from './utils';
 import { FileRenameHandler } from './file-rename-handler';
 import { WatchrStats } from './watchr-stats';
-import { FileEvent, DirectoryEvent, WatcherEvent, renameTimeout } from './constants';
+import { FileEvent, DirectoryEvent, FileSystemEvent, WatcherEvent, renameTimeout } from './constants';
 import { FileSystemEventManager } from './file-system-event-manager';
 import type { WatchOptions } from 'node:fs';
-import type { Handler, WatchIgnore, Path, WatchrOptions, WatchrConfig, AsyncCallable, Closable, FileSystemEvent } from './@types/index';
+import type { Handler, WatchIgnore, Path, WatchrOptions, WatchrConfig, AsyncCallable, Closable } from './@types/index';
 
 type NativeIgnoreEntry = string | RegExp | ((filename: string) => boolean);
 type NativeIgnoreMatcher = NativeIgnoreEntry | ReadonlyArray<NativeIgnoreEntry>;
@@ -26,6 +26,7 @@ class Watchr extends EventEmitter implements Closable {
 	private readonly abortController: AbortController;
 	private readonly _abortSignal: AbortSignal;
 	private readonly _readyLock: Promise<void>;
+	private readonly _readyReject: (reason?: unknown) => void;
 	private readonly _renameHandler: FileRenameHandler;
 	private readonly roots: Set<Path>;
 	private readonly watchers: Record<Path, WatchrConfig[]>;
@@ -42,6 +43,7 @@ class Watchr extends EventEmitter implements Closable {
 	 */
 	constructor(target: Path[] | Path = [], options: WatchrOptions = {}, handler?: Handler) {
 		super();
+
 		if (process.platform === 'win32') { throw new Error('Windows is not supported directly. Use WSL') }
 
 		Watchr.validateWatchArguments(options, handler);
@@ -50,7 +52,9 @@ class Watchr extends EventEmitter implements Closable {
 		this.ready = false;
 		this.abortController = new AbortController();
 		this._abortSignal = this.abortController.signal;
+		let rejectReady: (reason?: unknown) => void = noop;
 		this._readyLock = new Promise((resolve, reject) => {
+			rejectReady = reject;
 			const cleanup = (): void => {
 				this.off(WatcherEvent.READY, onReady);
 				this.off(WatcherEvent.CLOSE, onClose);
@@ -69,6 +73,7 @@ class Watchr extends EventEmitter implements Closable {
 			this.on(WatcherEvent.READY, onReady);
 			this.on(WatcherEvent.CLOSE, onClose);
 		});
+		this._readyReject = rejectReady;
 		this._readyLock.catch(noop);
 		this.roots = new Set();
 		this._renameHandler = new FileRenameHandler(this.emitEvent.bind(this), this.error.bind(this));
@@ -131,10 +136,8 @@ class Watchr extends EventEmitter implements Closable {
 	isIgnored(targetPath: Path, ignore?: WatchIgnore): boolean {
 		if (ignore === undefined) { return false }
 
-		if (typeof ignore !== 'function') { return Watchr.matchesNativeIgnore(targetPath, ignore) }
-
 		try {
-			return ignore(targetPath);
+			return typeof ignore === 'function' ? ignore(targetPath) : Watchr.matchesNativeIgnore(targetPath, ignore);
 		} catch (error: unknown) {
 			this.error(new Error('🚨 ignore callback failed.', { cause: error }));
 			return true;
@@ -201,10 +204,15 @@ class Watchr extends EventEmitter implements Closable {
 	 * Closes the watcher
 	 */
 	close(): void {
+		if (this.isClosed()) { return }
+
+		this.closed = true;
+		this.abortController.abort();
+		this._readyReject(new Error('🚨 watcher closed before becoming ready.'));
 		this._renameHandler.reset();
 		this.roots.clear();
-		this.lastKnownStats.clear();
 		this.watchersClose();
+		this.lastKnownStats.clear();
 
 		// Clear watcher restoration timeout and restorable watchers
 		if (this.watchersRestoreTimeout) {
@@ -213,14 +221,14 @@ class Watchr extends EventEmitter implements Closable {
 		}
 		this.watchersRestorable = {};
 
-		if (this.isClosed()) { return }
-
-		this.closed = true;
-
-		// Abort pending operations before emitting close event to avoid race conditions
-		this.abortController.abort();
-
 		this.emit(WatcherEvent.CLOSE);
+	}
+
+	/**
+	 * Disposes the watcher using the explicit resource management protocol.
+	 */
+	[Symbol.dispose](): void {
+		this.close();
 	}
 
 	/**
@@ -243,7 +251,7 @@ class Watchr extends EventEmitter implements Closable {
 	emitEvent(event: FileSystemEvent, targetPath: Path, targetPathNext?: Path): void {
 		if (this.isClosed()) { return }
 
-		const targetStats = this.resolveEventStats(targetPath, targetPathNext);
+		const targetStats = this.resolveEventStats(event, targetPath, targetPathNext);
 
 		if (targetPathNext !== undefined) {
 			this.lastKnownStats.delete(targetPath);
@@ -260,39 +268,43 @@ class Watchr extends EventEmitter implements Closable {
 
 	/**
 	 * Resolves event stats with fallbacks for rename/unlink edge cases.
+	 * @param event Event being emitted.
 	 * @param targetPath Primary event path.
 	 * @param targetPathNext Optional secondary event path.
 	 * @returns A concrete stats object for downstream handlers.
 	 */
-	private resolveEventStats(targetPath: Path, targetPathNext?: Path): WatchrStats {
+	private resolveEventStats(event: FileSystemEvent, targetPath: Path, targetPathNext?: Path): WatchrStats {
 		const fileStateStats = this._renameHandler.fileStateManager.stats;
+		const isRemoval = event === FileSystemEvent.UNLINK || event === FileSystemEvent.UNLINK_DIR || event === FileSystemEvent.RENAME || event === FileSystemEvent.RENAME_DIR;
+		const cachedStats = this.lastKnownStats.get(targetPath);
 		const currentStats = fileStateStats.get(targetPath);
 
+		if (isRemoval && cachedStats) { return cachedStats }
 		if (currentStats) { return currentStats }
 
 		if (targetPathNext) {
-			const nextStats = fileStateStats.get(targetPathNext);
+			const nextStats = fileStateStats.get(targetPathNext) ?? this.lastKnownStats.get(targetPathNext);
 
 			if (nextStats) { return nextStats }
 		}
 
-		const cachedStats = this.lastKnownStats.get(targetPath) ?? (targetPathNext ? this.lastKnownStats.get(targetPathNext) : undefined);
-
-		return cachedStats ?? Watchr.createFallbackStats();
+		return Watchr.createFallbackStats(event === FileSystemEvent.ADD_DIR || event === FileSystemEvent.UNLINK_DIR || event === FileSystemEvent.RENAME_DIR);
 	}
 
 	/**
 	 * Creates a synthetic stats snapshot for edge-case events where native
 	 * watchers do not provide enough information to recover a tracked stat.
+	 * @param isDirectory Whether the synthetic snapshot represents a directory.
 	 * @returns A synthetic stats object with default values.
 	 */
-	private static createFallbackStats(): WatchrStats {
-		const nowMs = Math.trunc(performance.now());
+	private static createFallbackStats(isDirectory: boolean): WatchrStats {
+		const nowMs = Date.now();
 		const nowDate = new Date(nowMs);
 		const nowInstant = Temporal.Instant.fromEpochMilliseconds(nowMs);
 		const nowNs = BigInt(nowMs) * 1_000_000n;
 		const nowMsBigInt = BigInt(nowMs);
-		const alwaysTrue = () => true;
+		const isFile = () => !isDirectory;
+		const isDir = () => isDirectory;
 		const alwaysFalse = () => false;
 
 		return new WatchrStats({
@@ -310,8 +322,8 @@ class Watchr extends EventEmitter implements Closable {
 			mtimeInstant: nowInstant,
 			ctimeInstant: nowInstant,
 			birthtimeInstant: nowInstant,
-			isFile: alwaysTrue,
-			isDirectory: alwaysFalse,
+			isFile,
+			isDirectory: isDir,
 			isSymbolicLink: alwaysFalse,
 			isBlockDevice: alwaysFalse,
 			isCharacterDevice: alwaysFalse,
@@ -329,7 +341,7 @@ class Watchr extends EventEmitter implements Closable {
 			mtime: nowDate,
 			ctime: nowDate,
 			birthtime: nowDate
-		});
+		}, true);
 	}
 
 	/**
@@ -363,7 +375,7 @@ class Watchr extends EventEmitter implements Closable {
 	}
 
 	/** Restores the watchers from a previous state */
-	private watchersRestore() {
+	private async watchersRestore(): Promise<void> {
 		delete this.watchersRestoreTimeout;
 
 		if (this.isClosed()) { return }
@@ -372,7 +384,11 @@ class Watchr extends EventEmitter implements Closable {
 		this.watchersRestorable = {};
 
 		for (const [ targetPath, { options, handler } ] of Object.entries(restorable)) {
-			void this.watchPath(targetPath, options, handler);
+			try {
+				await this.watchPath(targetPath, options, handler);
+			} catch (error: unknown) {
+				try { this.error(error) } catch { /* ignore */ }
+			}
 		}
 	}
 
@@ -384,10 +400,29 @@ class Watchr extends EventEmitter implements Closable {
 	private async addWatcher(config: WatchrConfig) {
 		this.addWatcherConfig(config);
 
-		const eventManager = await FileSystemEventManager.newInstance(this._renameHandler.fileStateManager, this, config);
-		config.eventManager = eventManager;
+		try {
+			const eventManager = await FileSystemEventManager.newInstance(this._renameHandler.fileStateManager, this, config);
+			config.eventManager = eventManager;
 
-		return eventManager;
+			return eventManager;
+		} catch (error: unknown) {
+			this.removeWatcherConfig(config);
+			config.watcher.close();
+			throw error;
+		}
+	}
+
+	/**
+	 * Removes a watcher configuration after failed asynchronous initialization.
+	 * @param config The watcher configuration to remove.
+	 */
+	private removeWatcherConfig(config: WatchrConfig): void {
+		const configs = this.watchers[config.folderPath];
+		if (!configs) { return }
+
+		const index = configs.indexOf(config);
+		if (index !== -1) { configs.splice(index, 1) }
+		if (configs.length === 0) { delete this.watchers[config.folderPath] }
 	}
 
 	/**
@@ -425,7 +460,10 @@ class Watchr extends EventEmitter implements Closable {
 	private async synchronizeWatchers(callback: AsyncCallable) {
 		await this._watchersLock;
 
-		return this._watchersLock = callback();
+		const task = this._watchersLock.then(() => callback(), () => callback());
+		this._watchersLock = task.catch(noop);
+
+		return task;
 	}
 
 	/**
@@ -550,9 +588,31 @@ class Watchr extends EventEmitter implements Closable {
 	private async watch(target: Path[], options: WatchrOptions, handler?: Handler) {
 		if (this.isClosed()) { return }
 
-		for (const targetPath of target) { this.roots.add(targetPath) }
+		for (const targetPath of target) { this.roots.add(resolve(targetPath)) }
 
-		await this.watchPaths(target, options, handler);
+		try {
+			await this.watchPaths(target, options, handler);
+		} catch (error: unknown) {
+			this._readyReject(error);
+			this.roots.clear();
+			this.watchersClose();
+			this.watchersRestorable = {};
+			if (this.watchersRestoreTimeout) {
+				clearTimeout(this.watchersRestoreTimeout);
+				delete this.watchersRestoreTimeout;
+			}
+			this._renameHandler.reset();
+			this.closed = true;
+			this.abortController.abort();
+			try {
+				this.emit(WatcherEvent.ERROR, castError(error));
+			} catch (error: unknown) {
+				void error;
+			}
+			this.emit(WatcherEvent.CLOSE);
+
+			return;
+		}
 
 		if (this.isClosed()) { return }
 
@@ -593,7 +653,7 @@ class Watchr extends EventEmitter implements Closable {
 			this.watchersRestorable[rootPath] = config;
 
 			if (!this.watchersRestoreTimeout) {
-				this.watchersRestoreTimeout = setTimeout(() => this.watchersRestore());
+				this.watchersRestoreTimeout = setTimeout(() => void this.watchersRestore());
 			}
 		}
 	}
@@ -612,7 +672,12 @@ class Watchr extends EventEmitter implements Closable {
 			...(options.throwIfNoEntry === undefined ? {} : { throwIfNoEntry: options.throwIfNoEntry })
 		};
 
-		return typeof ignore !== 'function' ? { ...watchOptions, ...(ignore === undefined ? {} : { ignore }) } : { ...watchOptions, ignore };
+		if (ignore === undefined) { return watchOptions }
+		if (typeof ignore === 'function' || (Array.isArray(ignore) && ignore.some((entry) => typeof entry === 'function'))) {
+			return { ...watchOptions, ignore: (targetPath: string) => this.isIgnored(targetPath, ignore) };
+		}
+
+		return { ...watchOptions, ignore };
 	}
 
 	/**

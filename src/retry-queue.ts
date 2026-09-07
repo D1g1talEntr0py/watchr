@@ -1,6 +1,16 @@
 import type { Resolver } from './@types/index';
 import { fileDescriptorLimit } from './constants';
 
+/** A disposable lease for admitted retry queue work. */
+export interface RetryQueueLease<T> extends Disposable {
+	/** Releases the queue slot and returns the provided value. */
+	(value?: T): T | undefined;
+	/** Releases the queue slot and returns the provided value. */
+	resolve: (value?: T) => T | undefined;
+	/** Releases the queue slot without resolving a value. */
+	dispose: () => void;
+}
+
 /** A class that manages a retry queue for handling tasks that need to be retried */
 export class RetryQueue {
 	/** The interval ID for the retry queue processing. */
@@ -14,18 +24,47 @@ export class RetryQueue {
 
 	/**
 	 * Schedules a task to be retried.
-	 * @returns A promise that resolves to a function which can be called to resolve the task.
+	 * @param signal Optional signal that cancels pending admission.
+	 * @returns A promise that resolves to a disposable lease for the admitted task.
 	 */
-	schedule<T>(): Promise<(value?: T) => T | undefined> {
-		return new Promise((resolve): void => {
-			/**
-			 * Resolves the task with the given value.
-			 * @returns The resolved value or undefined.
-			 */
-			const resolver = (): void => resolve((value?: T): T | undefined => {
-				this.activeQueue.delete(resolver);
-				return value;
-			});
+	schedule<T>(signal?: AbortSignal): Promise<RetryQueueLease<T>> {
+		return new Promise((resolve, reject): void => {
+			if (signal?.aborted) {
+				reject(new DOMException('The operation was aborted', 'AbortError'));
+
+				return;
+			}
+
+			let settled = false;
+			const onAbort = () => {
+				if (settled) { return }
+
+				settled = true;
+				this.pendingQueue.delete(resolver);
+				signal?.removeEventListener('abort', onAbort);
+
+				if (!this.pendingQueue.size) { this.reset() }
+
+				reject(new DOMException('The operation was aborted', 'AbortError'));
+			};
+
+			/** Resolves the task with the given value. */
+			const resolver = (): void => {
+				if (settled) { return }
+
+				settled = true;
+				signal?.removeEventListener('abort', onAbort);
+				const release = (value?: T): T | undefined => {
+					this.activeQueue.delete(resolver);
+					return value;
+				};
+
+				const dispose = (): void => void release();
+
+				resolve(Object.assign(release, { resolve: release, dispose, [Symbol.dispose]: dispose }));
+			};
+
+			signal?.addEventListener('abort', onAbort, { once: true });
 
 			this.add(resolver);
 		});
@@ -50,18 +89,18 @@ export class RetryQueue {
 	/**
 	 * Processes the pending queue, moving items to the active queue and executing them.
 	 * This method is called at regular intervals to ensure that pending tasks are processed.
-	 * @returns void
 	 */
 	private processQueue() {
 		if (fileDescriptorLimit <= this.activeQueue.size) { return }
+
 		if (!this.pendingQueue.size) { return this.reset() }
 
-		for (const fn of this.pendingQueue) {
+		for (const resolver of this.pendingQueue) {
 			if (fileDescriptorLimit <= this.activeQueue.size) { return }
 
-			this.pendingQueue.delete(fn);
-			this.activeQueue.add(fn);
-			fn();
+			this.pendingQueue.delete(resolver);
+			this.activeQueue.add(resolver);
+			resolver();
 		}
 
 		if (!this.pendingQueue.size) { this.reset() }

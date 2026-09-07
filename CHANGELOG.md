@@ -1,3 +1,15 @@
+# [3.4.0](https://github.com/D1g1talEntr0py/watchr/compare/v3.3.0...v3.4.0) (2026-09-07)
+
+
+### Bug Fixes
+
+* preserve event state during delayed processing ([6e7674e](https://github.com/D1g1talEntr0py/watchr/commit/6e7674e5e4239a92f897b5d016044228ffc17ce8))
+
+
+### Features
+
+* add abortable operations and disposable resources ([9afc73e](https://github.com/D1g1talEntr0py/watchr/commit/9afc73ecd737f7c6786377d02c420f33db8d6c49))
+
 # [3.3.0](https://github.com/D1g1talEntr0py/watchr/compare/v3.2.3...v3.3.0) (2026-08-27)
 
 

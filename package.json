@@ -21,7 +21,7 @@
   "engines": {
     "node": ">=24.6.0"
   },
-  "packageManager": "pnpm@12.0.0",
+  "packageManager": "pnpm@12.3.4",
   "publishConfig": {
     "registry": "https://registry.npmjs.org",
     "access": "public"
@@ -54,21 +54,21 @@
     "bench:diagnostics": "pnpm build && node --expose-gc benchmarks/diagnostics.bench.ts"
   },
   "dependencies": {
-    "temporal-polyfill-lite": "^0.4.2"
+    "temporal-polyfill-lite": "^0.4.3"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@types/node": "^26.3.0",
+    "@types/node": "^26.4.1",
     "@typescript/native": "npm:typescript@^7.0.2",
-    "@vitest/coverage-v8": "^4.1.11",
+    "@vitest/coverage-v8": "^5.0.0",
     "esbuild": "^0.28.2",
-    "eslint": "^10.9.1",
-    "eslint-plugin-jsdoc": "^64.2.1",
-    "memfs": "^4.68.1",
+    "eslint": "^10.10.0",
+    "eslint-plugin-jsdoc": "^64.3.6",
+    "memfs": "^4.71.0",
     "mitata": "^1.0.34",
     "typescript": "npm:@typescript/typescript6@^6.0.2",
-    "typescript-eslint": "^8.68.0",
-    "vitest": "^4.1.11"
+    "typescript-eslint": "^8.69.0",
+    "vitest": "^5.0.0"
   },
   "keywords": [
     "fs",

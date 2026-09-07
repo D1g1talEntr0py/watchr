@@ -6,7 +6,7 @@
 [![codecov](https://codecov.io/gh/D1g1talEntr0py/watchr/graph/badge.svg)](https://codecov.io/gh/D1g1talEntr0py/watchr)
 [![License: MIT](https://img.shields.io/github/license/D1g1talEntr0py/watchr)](https://github.com/D1g1talEntr0py/watchr/blob/main/LICENSE)
 [![Node.js](https://img.shields.io/node/v/@d1g1tal/watchr)](https://nodejs.org)
-[![TypeScript](https://img.shields.io/badge/TypeScript->=5.0.4-blue?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript->=6.0.0-blue?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 
 > **⚠️ Important Notice**: This is a personal fork of [`Watcher`](https://github.com/fabiospampinato/watcher) by [Fabio Spampinato](https://github.com/fabiospampinato), modified to fit specific personal needs and experimentation. **Most users should use the original [Watcher](https://github.com/fabiospampinato/watcher) library instead**, which is actively maintained, battle-tested, and feature-complete.
 
@@ -39,7 +39,7 @@ yarn add @d1g1tal/watchr
 ## Quick Start
 
 ```typescript
-import { Watchr } from 'watchr';
+import { Watchr } from '@d1g1tal/watchr';
 
 // Watch a single directory
 const watcher = new Watchr('/path/to/watch');
@@ -62,12 +62,27 @@ watcher.on('change', (stats, filePath) => {
 watcher.close();
 ```
 
+Watchr also supports JavaScript explicit resource management in Node.js 24+:
+
+```typescript
+import { once } from 'node:events';
+import { Watchr } from '@d1g1tal/watchr';
+
+{
+  using watcher = new Watchr('/path/to/watch');
+  await watcher.readyLock;
+
+  const [stats, filePath] = await once(watcher, 'change');
+  console.log(`File changed: ${filePath}`);
+}
+```
+
 ## Configuration Options
 
 Watchr accepts the following options to customize behavior:
 
 - **`persistent`**: Whether to keep the Node.js process running while watching
-  - Default: `false`
+  - Default: `true` (Node.js native watcher default)
   - When `true`, prevents the process from exiting while the watcher is active
 
 - **`recursive`**: Enable recursive watching of subdirectories
@@ -141,6 +156,9 @@ isReady(): boolean
 // Close the watcher and stop all watching
 close(): void
 
+// Dispose the watcher; equivalent to close()
+[Symbol.dispose](): void
+
 // Check if a path should be ignored
 isIgnored(targetPath: string, ignore?: WatchIgnore): boolean
 
@@ -213,7 +231,7 @@ new Watchr('/repo', { ignore: [ '**/*.tmp', /\.cache\// ] });
 ### Basic File Watching
 
 ```typescript
-import { Watchr } from 'watchr';
+import { Watchr } from '@d1g1tal/watchr';
 
 // Watch a single directory
 const watcher = new Watchr('/path/to/watch', { recursive: true });
@@ -313,6 +331,23 @@ abortSignal.addEventListener('abort', () => {
 // Close the watcher (triggers abort)
 setTimeout(() => watcher.close(), 10000);
 ```
+
+### With Explicit Resource Management
+
+```typescript
+import { once } from 'node:events';
+import { Watchr } from '@d1g1tal/watchr';
+
+{
+  using watcher = new Watchr('/path/to/watch');
+  await watcher.readyLock;
+
+  const [event, stats, targetPath] = await once(watcher, 'all');
+  console.log(event, targetPath);
+}
+```
+
+These examples watch until the first matching event after readiness. Leaving the `using` block calls `watcher[Symbol.dispose]()` automatically. Disposal is synchronous, idempotent, emits `close` once, aborts `abortSignal`, and has the same behavior as `watcher.close()`.
 
 ## Requirements
 

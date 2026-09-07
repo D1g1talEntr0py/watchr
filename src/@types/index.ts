@@ -5,7 +5,7 @@ import type { FileSystemLocker } from '../file-system-locker';
 import type { FileSystemEventManager } from '../file-system-event-manager';
 import type { NodeTargetEvent, FileSystemEvent, DirectoryEvent, FileEvent } from '../constants';
 
-interface Closable { close: Callable };
+interface Closable extends Disposable { close: Callable };
 
 type Prettify<T> = { [K in keyof T]: T[K] } & {};
 type MergeConstTypes<T, U> = Prettify<{ readonly [K in keyof T & keyof U]: T[K] | U[K] } & Partial<Omit<T, keyof U>> & Partial<Omit<U, keyof T>>>;

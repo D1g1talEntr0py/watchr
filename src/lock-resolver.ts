@@ -30,10 +30,12 @@ export class LockResolver {
 	 * Adds a resolver function to be called after a timeout.
 	 * @param fn - The resolver function to add.
 	 * @param timeout - The timeout duration in milliseconds.
-	 * @param onEvict - Optional callback invoked if the resolver is evicted before it resolves.
+	 * @param onEvict - Optional callback that settles the operation if the resolver is evicted before it resolves.
 	 */
 	add(fn: Resolver, timeout: number, onEvict?: () => void): void {
 		const timestamp = performance.now() + timeout;
+		let evictionError: unknown;
+		let evictionFailed = false;
 
 		if (!this.resolvers.has(fn) && this.resolvers.size >= this.maxResolvers) {
 			// Keep memory bounded under heavy event pressure by evicting the oldest pending resolver.
@@ -42,9 +44,13 @@ export class LockResolver {
 			if (oldestResolver !== undefined) {
 				const oldestEntry = this.resolvers.get(oldestResolver);
 				this.resolvers.delete(oldestResolver);
-				console.warn('🚨 Lock resolver capacity exceeded. Evicting oldest pending resolver.');
 
-				oldestEntry?.onEvict?.();
+				try {
+					oldestEntry?.onEvict?.();
+				} catch (error) {
+					evictionError = error;
+					evictionFailed = true;
+				}
 			}
 		}
 
@@ -53,6 +59,8 @@ export class LockResolver {
 		if (timestamp < this.nextDeadline) { this.nextDeadline = timestamp }
 
 		this.init();
+
+		if (evictionFailed) { throw evictionError }
 	}
 
 	/**

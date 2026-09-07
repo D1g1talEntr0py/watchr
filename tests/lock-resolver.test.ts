@@ -68,7 +68,7 @@ describe('LockResolver', () => {
     cappedResolver.reset();
   });
 
-  it('calls onEvict callback and warns on eviction', () => {
+  it('calls onEvict callback without writing a duplicate console diagnostic', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const cappedResolver = new LockResolver({ maxResolvers: 1 });
     const onEvict = vi.fn();
@@ -77,7 +77,7 @@ describe('LockResolver', () => {
     cappedResolver.add(() => undefined, 1_000);
 
     expect(onEvict).toHaveBeenCalledTimes(1);
-    expect(warnSpy).toHaveBeenCalledWith('🚨 Lock resolver capacity exceeded. Evicting oldest pending resolver.');
+    expect(warnSpy).not.toHaveBeenCalled();
 
     warnSpy.mockRestore();
     cappedResolver.reset();

@@ -110,6 +110,32 @@ describe('FileSystemStateManager', () => {
   });
 
 	describe('update', () => {
+		it('does not mutate state when a stat failure is indeterminate', async () => {
+			const existingStats = createStats('file');
+			vi.mocked(FileSystem.getStats).mockResolvedValueOnce(existingStats);
+			await fileSystemStateManager.update('/file.txt');
+			vi.mocked(FileSystem.getStats).mockRejectedValueOnce(new Error('permission denied'));
+
+			await expect(fileSystemStateManager.update('/file.txt')).rejects.toThrow('permission denied');
+			expect(fileSystemStateManager.stats.has('/file.txt')).toBe(true);
+			expect(fileSystemStateManager.paths.get(123)).toEqual(new Set([ '/file.txt' ]));
+		});
+
+		it('ignores a stat completion after reset', async () => {
+			let resolveStats!: (stats: Stats) => void;
+			vi.mocked(FileSystem.getStats).mockReturnValueOnce(new Promise((resolve) => {
+				resolveStats = resolve;
+			}));
+
+			const update = fileSystemStateManager.update('/late.txt');
+			fileSystemStateManager.reset();
+			resolveStats(createStats('file'));
+
+			expect(await update).toEqual([]);
+			expect(fileSystemStateManager.stats.size).toBe(0);
+			expect(fileSystemStateManager.paths.size).toBe(0);
+		});
+
 		it('should handle file addition', async () => {
 			vi.mocked(FileSystem.getStats).mockResolvedValueOnce({ ...timestampStats, isFile: () => true, isDirectory: () => false, isSymbolicLink: () => false, ino: 123n, size: 100n } as unknown as Stats);
 			const events = await fileSystemStateManager.update('/file.txt');
@@ -263,8 +289,8 @@ describe('FileSystemStateManager', () => {
 			expect(await runTransition(createStats('file'), undefined)).toEqual([FileSystemEvent.UNLINK]);
 		});
 
-		it('directory to directory with identical stats (case 12) emits unlinkDir + addDir', async () => {
-			expect(await runTransition(createStats('dir'), createStats('dir'))).toEqual([FileSystemEvent.UNLINK_DIR, FileSystemEvent.ADD_DIR]);
+		it('directory to directory with identical stats (case 12) emits no events', async () => {
+			expect(await runTransition(createStats('dir'), createStats('dir'))).toEqual([]);
 		});
 
 		it('directory to directory with a different inode (case 12) emits unlinkDir + addDir', async () => {
@@ -309,6 +335,18 @@ describe('FileSystemStateManager', () => {
 	});
 
 	describe('public state updates', () => {
+		it('removes stale inode mappings when a path is replaced', async () => {
+			vi.mocked(FileSystem.getStats)
+				.mockResolvedValueOnce(createStats('file', { ino: 123n }))
+				.mockResolvedValueOnce(createStats('file', { ino: 456n }));
+
+			await fileSystemStateManager.update('/file.txt');
+			await fileSystemStateManager.update('/file.txt');
+
+			expect(fileSystemStateManager.paths.get(123)).toBeUndefined();
+			expect(fileSystemStateManager.paths.get(456)).toEqual(new Set([ '/file.txt' ]));
+		});
+
 		it('updates public stats and inode-path map after update', async () => {
 			vi.mocked(FileSystem.getStats).mockResolvedValueOnce({
 				...timestampStats,

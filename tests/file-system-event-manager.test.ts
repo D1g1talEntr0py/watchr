@@ -121,6 +121,31 @@ describe('FileSystemEventManager', () => {
 		expect(nodeHandler).not.toHaveBeenCalled();
 	});
 
+	it('delivers initial events after delayed polling', async () => {
+		const initialEvents = [ FileSystemEvent.ADD_DIR ];
+		let releasePolling!: () => void;
+		const pollingReleased = new Promise<void>((resolvePolling) => { releasePolling = resolvePolling });
+		vi.spyOn(watchr, 'isReady').mockReturnValue(false);
+		const lockSpy = vi.spyOn(watchr.renameWatchr, 'getLockTargetEvent').mockImplementation(() => undefined);
+		vi.spyOn(poller, 'update').mockImplementation(async () => {
+			await pollingReleased;
+			return initialEvents;
+		});
+
+		const managerPromise = FileSystemEventManager.newInstance(poller, watchr, {
+			watcher: watcher as unknown as WatchrConfig['watcher'],
+			options: { ...defaultOptions, ignoreInitial: false, renameTimeout: 0 },
+			folderPath: tmpDir,
+		});
+
+		await vi.waitFor(() => expect(poller.update).toHaveBeenCalled());
+		releasePolling();
+		const manager = await managerPromise;
+
+		await vi.waitFor(() => expect(lockSpy).toHaveBeenCalledWith(FileSystemEvent.ADD_DIR, tmpDir, 0, expect.any(Set)));
+		manager.cleanup();
+	});
+
 	describe('batch deduplication', () => {
 		/**
 		 * Creates an event manager whose poller yields the given events per path,
@@ -224,5 +249,63 @@ describe('FileSystemEventManager', () => {
 			expect(emitEventSpy).toHaveBeenCalledTimes(1);
 			expect(emitEventSpy).toHaveBeenCalledWith(FileSystemEvent.CHANGE, pathA);
 		});
+
+		it.each([
+			[ FileSystemEvent.UNLINK, FileSystemEvent.ADD_DIR ],
+			[ FileSystemEvent.UNLINK_DIR, FileSystemEvent.ADD ],
+		])('preserves replacement transitions for one path', async (removeEvent, addEvent) => {
+			const pathA = resolve(tmpDir, 'replacement');
+			const { lockSpy } = await setupBatchCapture(new Map([
+				[ pathA, [ removeEvent, addEvent ] ],
+			]));
+
+			emitBatch('replacement');
+
+			await vi.waitFor(() => expect(lockSpy).toHaveBeenCalledTimes(2));
+			await delay(25);
+
+			expect(lockSpy.mock.calls.map(([event, targetPath]) => [ event, targetPath ])).toEqual([
+				[ removeEvent, pathA ],
+				[ addEvent, pathA ],
+			]);
+		});
+
+		it.each([
+			[ FileSystemEvent.UNLINK, FileSystemEvent.ADD_DIR ],
+			[ FileSystemEvent.UNLINK_DIR, FileSystemEvent.ADD ],
+		])('preserves replacement transitions for one path and a co-batched path', async (removeEvent, addEvent) => {
+			const pathA = resolve(tmpDir, 'replacement');
+			const pathB = resolve(tmpDir, 'other.txt');
+			const { lockSpy } = await setupBatchCapture(new Map([
+				[ pathA, [ removeEvent, addEvent ] ],
+				[ pathB, [ FileSystemEvent.CHANGE ] ],
+			]));
+
+			emitBatch('replacement', 'other.txt');
+
+			await vi.waitFor(() => expect(lockSpy).toHaveBeenCalledTimes(2));
+			await delay(25);
+
+			expect(lockSpy.mock.calls.map(([event, targetPath]) => [ event, targetPath ])).toEqual([
+				[ removeEvent, pathA ],
+				[ addEvent, pathA ],
+			]);
+		});
+	});
+
+	it('routes null, undefined, and empty filenames through the fallback', async () => {
+		const manager = await FileSystemEventManager.newInstance(poller, watchr, {
+			watcher: watcher as unknown as WatchrConfig['watcher'],
+			options: defaultOptions,
+			folderPath: tmpDir,
+		});
+		const fallbackSpy = vi.spyOn(manager as unknown as { onEmptyDirectoryWatcherChange: (event: NodeTargetEvent) => void }, 'onEmptyDirectoryWatcherChange');
+
+		watcher.emit('change', NodeTargetEvent.CHANGE, null);
+		watcher.emit('change', NodeTargetEvent.CHANGE);
+		watcher.emit('change', NodeTargetEvent.CHANGE, '');
+
+		expect(fallbackSpy).toHaveBeenCalledTimes(3);
+		manager.cleanup();
 	});
 });

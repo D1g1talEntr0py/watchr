@@ -292,18 +292,74 @@ describe('FileRenameHandler', () => {
   });
 
   describe('lock overflow handling', () => {
-    it('should emit a safe error when lock resolver capacity is exceeded', () => {
-      const addSpy = vi.spyOn(LockResolver.prototype, 'add').mockImplementation((_fn, _timeout, onEvict) => {
-        onEvict?.();
-      });
+    it('settles displaced file locks once and removes their resolver state', () => {
+      vi.useFakeTimers();
+      const resolver = new LockResolver({ maxResolvers: 1 });
+      fileRenameHandler = new FileRenameHandler(emitEvent, emitError, resolver);
+      fileSystemPoller = fileRenameHandler.fileStateManager;
+      vi.spyOn(fileSystemPoller, 'getInodeNumber').mockImplementation((targetPath) => targetPath === '/first-file' || targetPath === '/later-file' ? 1 : 2);
 
-      vi.spyOn(fileSystemPoller, 'getInodeNumber').mockReturnValue(123);
+      fileRenameHandler.getLockTargetEvent(FileSystemEvent.ADD, '/first-file', 100);
+      fileRenameHandler.getLockTargetEvent(FileSystemEvent.ADD, '/second-file', 100);
+      fileRenameHandler.getLockTargetEvent(FileSystemEvent.UNLINK, '/later-file', 100);
+      vi.advanceTimersByTime(100);
 
-      fileRenameHandler.getLockTargetEvent(FileSystemEvent.UNLINK, '/old-file');
+      expect(emitEvent).toHaveBeenCalledTimes(3);
+      expect(emitEvent).toHaveBeenCalledWith(FileSystemEvent.ADD, '/first-file');
+      expect(emitEvent).toHaveBeenCalledWith(FileSystemEvent.ADD, '/second-file');
+      expect(emitEvent).toHaveBeenCalledWith(FileSystemEvent.UNLINK, '/later-file');
+      expect(emitEvent).not.toHaveBeenCalledWith(FileSystemEvent.RENAME, '/first-file', '/later-file');
+      expect(emitError).toHaveBeenCalledTimes(2);
+      expect(fileRenameHandler['fileLocks'].getLock(1)).toBeUndefined();
+      expect(fileRenameHandler['fileLocks'].getLock(2)).toBeUndefined();
+      expect(fileRenameHandler['fileLocks'].getUnlink(1)).toBeUndefined();
 
-      expect(emitError).toHaveBeenCalledWith(expect.objectContaining({ message: '🚨 Lock resolver capacity exceeded.' }));
+      vi.useRealTimers();
+    });
 
-			addSpy.mockRestore();
+    it('settles displaced directory locks once and removes their resolver state', () => {
+      vi.useFakeTimers();
+      const resolver = new LockResolver({ maxResolvers: 1 });
+      fileRenameHandler = new FileRenameHandler(emitEvent, emitError, resolver);
+      fileSystemPoller = fileRenameHandler.fileStateManager;
+      vi.spyOn(fileSystemPoller, 'getInodeNumber').mockImplementation((targetPath) => targetPath === '/first-dir' || targetPath === '/later-dir' ? 3 : 4);
+
+      fileRenameHandler.getLockTargetEvent(FileSystemEvent.ADD_DIR, '/first-dir', 100);
+      fileRenameHandler.getLockTargetEvent(FileSystemEvent.ADD_DIR, '/second-dir', 100);
+      fileRenameHandler.getLockTargetEvent(FileSystemEvent.UNLINK_DIR, '/later-dir', 100);
+      vi.advanceTimersByTime(100);
+
+      expect(emitEvent).toHaveBeenCalledTimes(3);
+      expect(emitEvent).toHaveBeenCalledWith(FileSystemEvent.ADD_DIR, '/first-dir');
+      expect(emitEvent).toHaveBeenCalledWith(FileSystemEvent.ADD_DIR, '/second-dir');
+      expect(emitEvent).toHaveBeenCalledWith(FileSystemEvent.UNLINK_DIR, '/later-dir');
+      expect(emitEvent).not.toHaveBeenCalledWith(FileSystemEvent.RENAME, '/first-dir', '/later-dir');
+      expect(emitError).toHaveBeenCalledTimes(2);
+      expect(fileRenameHandler['directoryLocks'].getLock(3)).toBeUndefined();
+      expect(fileRenameHandler['directoryLocks'].getLock(4)).toBeUndefined();
+      expect(fileRenameHandler['directoryLocks'].getUnlink(3)).toBeUndefined();
+
+      vi.useRealTimers();
+    });
+
+    it('keeps replacement cleanup when the error callback throws', () => {
+      vi.useFakeTimers();
+      const throwingError = vi.fn(() => { throw new Error('listener failure') });
+      const resolver = new LockResolver({ maxResolvers: 1 });
+      fileRenameHandler = new FileRenameHandler(emitEvent, throwingError, resolver);
+      fileSystemPoller = fileRenameHandler.fileStateManager;
+      vi.spyOn(fileSystemPoller, 'getInodeNumber').mockReturnValue(5);
+
+      fileRenameHandler.getLockTargetEvent(FileSystemEvent.ADD, '/first-file', 100);
+      expect(() => fileRenameHandler.getLockTargetEvent(FileSystemEvent.ADD, '/second-file', 100)).toThrow('listener failure');
+      vi.advanceTimersByTime(100);
+
+      expect(throwingError).toHaveBeenCalledTimes(1);
+      expect(emitEvent).toHaveBeenCalledWith(FileSystemEvent.ADD, '/first-file');
+      expect(emitEvent).toHaveBeenCalledWith(FileSystemEvent.ADD, '/second-file');
+      expect(fileRenameHandler['fileLocks'].getLock(5)).toBeUndefined();
+
+      vi.useRealTimers();
     });
   });
 });

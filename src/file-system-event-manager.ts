@@ -41,7 +41,7 @@ export class FileSystemEventManager {
 	private directoryFallbackScanInFlight: Promise<void> | undefined;
 	private directoryFallbackScanEvent: NodeTargetEvent | undefined;
 	private lastDirectoryFallbackScanAt: number;
-	private readonly watcherChangeHandler: (event?: NodeTargetEvent, targetName?: string) => void;
+	private readonly watcherChangeHandler: (event?: NodeTargetEvent, targetName?: string | null) => void;
 	private readonly watcherErrorHandler: (error: NodeJS.ErrnoException) => void;
 
 	/**
@@ -144,15 +144,17 @@ export class FileSystemEventManager {
 
 	/**
 	 * Acquires a lock for the current event batch
+	 * @param initials Initial events captured for this batch
+	 * @param regulars Regular target paths captured for this batch
 	 * @returns A Promise that resolves when the lock is acquired
 	 */
-	private async getLock(): Promise<void> {
-		const includeInitials = !this.options.ignoreInitial && this.initials.length > 0;
+	private async getLock(initials: Event[], regulars: Set<Path>): Promise<void> {
+		const includeInitials = !this.options.ignoreInitial && initials.length > 0;
 
-		if (!includeInitials && this.regulars.size === 0) { return }
+		if (!includeInitials && regulars.size === 0) { return }
 
-		if (!includeInitials && this.regulars.size === 1) {
-			const singleTargetPath: Path | undefined = this.regulars.values().next().value;
+		if (!includeInitials && regulars.size === 1) {
+			const singleTargetPath: Path | undefined = regulars.values().next().value;
 
 			if (singleTargetPath === undefined) { return }
 
@@ -165,8 +167,8 @@ export class FileSystemEventManager {
 			return;
 		}
 
-		const regularEvents = await this.populateEvents(this.regulars);
-		const allEvents = includeInitials ? [ ...this.initials, ...regularEvents ] : regularEvents;
+		const regularEvents = await this.populateEvents(regulars);
+		const allEvents = includeInitials ? [ ...initials, ...regularEvents ] : regularEvents;
 
 		if (allEvents.length === 0) { return }
 
@@ -193,9 +195,10 @@ export class FileSystemEventManager {
 	private flushImmediate() {
 		if (this.watchr.isClosed()) { return }
 
-		this.lock = this.getLock();
-		this.initials.length = 0;
+		const initials = this.initials.splice(0);
+		const regulars = new Set(this.regulars);
 		this.regulars.clear();
+		this.lock = this.getLock(initials, regulars);
 	}
 
 	/**
@@ -264,6 +267,12 @@ export class FileSystemEventManager {
 			}
 
 			const previousEvent = uniqueEvents[existingIndex]!;
+			if (FileSystemEventManager.isReplacementTransition(previousEvent[0], targetEvent)) {
+				eventIndexes.set(targetPath, uniqueEvents.length);
+				uniqueEvents.push(event);
+				continue;
+			}
+
 			const previousPriority = FileSystemEventManager.eventPriorities.get(previousEvent[0]) ?? 0;
 			const currentPriority = FileSystemEventManager.eventPriorities.get(targetEvent) ?? 0;
 
@@ -273,6 +282,17 @@ export class FileSystemEventManager {
 		}
 
 		return uniqueEvents;
+	}
+
+	/**
+	 * Checks whether two events describe a type-replacement transition.
+	 * @param previousEvent The preceding event for the path
+	 * @param currentEvent The following event for the path
+	 * @returns True when both events must be preserved
+	 */
+	private static isReplacementTransition(previousEvent: FileSystemEvent, currentEvent: FileSystemEvent): boolean {
+		return (previousEvent === FileSystemEvent.UNLINK && currentEvent === FileSystemEvent.ADD_DIR)
+			|| (previousEvent === FileSystemEvent.UNLINK_DIR && currentEvent === FileSystemEvent.ADD);
 	}
 
 	/**
@@ -342,7 +362,7 @@ export class FileSystemEventManager {
 	 * @param event The watcher change event to handle
 	 * @param targetName The target name of the event
 	 */
-	private onWatcherChange(event: NodeTargetEvent = NodeTargetEvent.CHANGE, targetName: string = '') {
+	private onWatcherChange(event: NodeTargetEvent = NodeTargetEvent.CHANGE, targetName: string | null = '') {
 		if (this.watchr.isClosed()) { return }
 
 		if (this.filePath !== undefined) {
@@ -353,7 +373,7 @@ export class FileSystemEventManager {
 			return;
 		}
 
-		if (targetName !== '') {
+		if (targetName !== null && targetName !== '') {
 			const targetPath = resolve(this.folderPath, targetName);
 
 			if (this.watchr.isIgnored(targetPath, this.options.ignore)) { return }

@@ -19,14 +19,15 @@ export class FileRenameHandler {
 	 * Creates an instance of FileRenameHandler.
 	 * @param emitEvent - The event emitter to use for emitting events.
 	 * @param emitError - The error emitter to use for reporting internal failures.
+	 * @param lockResolver - Optional resolver used to coordinate delayed lock settlement.
 	 */
-	constructor(emitEvent: TargetEventEmitter, emitError: (error: unknown) => boolean = () => false) {
+	constructor(emitEvent: TargetEventEmitter, emitError: (error: unknown) => boolean = () => false, lockResolver: LockResolver = new LockResolver()) {
 		this.emitEvent = emitEvent;
 		this.emitError = emitError;
 		this.fileLocks = new FileSystemLocker();
 		this.directoryLocks = new FileSystemLocker();
 		this.fileSystemStateManager = new FileSystemStateManager();
-		this.lockResolver = new LockResolver();
+		this.lockResolver = lockResolver;
 		this.canonicalChangedPathsCache = new WeakMap();
 	}
 
@@ -213,7 +214,13 @@ export class FileRenameHandler {
 			return;
 		}
 
-		this.lockResolver.add(free, timeout, () => this.emitError(new Error('🚨 Lock resolver capacity exceeded.')));
+		this.lockResolver.add(free, timeout, () => {
+			try {
+				free();
+			} finally {
+				this.emitError(new Error('🚨 Lock resolver capacity exceeded.'));
+			}
+		});
 	}
 
 	/**
@@ -269,7 +276,13 @@ export class FileRenameHandler {
 			return;
 		}
 
-		this.lockResolver.add(free, timeout, () => this.emitError(new Error('🚨 Lock resolver capacity exceeded.')));
+		this.lockResolver.add(free, timeout, () => {
+			try {
+				free();
+			} finally {
+				this.emitError(new Error('🚨 Lock resolver capacity exceeded.'));
+			}
+		});
 	}
 
 	/**

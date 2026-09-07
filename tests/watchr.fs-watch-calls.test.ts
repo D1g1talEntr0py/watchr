@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, rmSync, watch, writeFileSync } from 'node:fs';
 import type { WatchOptions } from 'node:fs';
 import { join } from 'node:path';
 import { Watchr } from '../src/watchr';
+import { FileSystemEventManager } from '../src/file-system-event-manager';
 
 vi.mock('node:fs', async () => {
 	const actual = await vi.importActual<typeof import('node:fs')>('node:fs');
@@ -148,6 +149,17 @@ describe('Watchr fs.watch invocation', () => {
 		expect(watchedPaths()).not.toContain(level1);
 		expect(watchrCalls().length).toBe(1);
 
+		watchr.close();
+	});
+
+	it('should roll back native handles and config after initialization fails', async () => {
+		const watchr = new Watchr([]);
+		await watchr.readyLock;
+		const initializationError = new Error('initialization failed');
+		vi.spyOn(FileSystemEventManager, 'newInstance').mockRejectedValueOnce(initializationError);
+
+		await expect(watchr.watchPath(testDir, {})).rejects.toBe(initializationError);
+		expect((watchr as unknown as { watchers: Record<string, unknown[]> }).watchers).toEqual({});
 		watchr.close();
 	});
 });

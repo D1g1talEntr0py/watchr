@@ -14,6 +14,7 @@ export class FileSystemStateManager {
 	private readonly targetInodeOrder = new Set<InodeEntry>();
 	private readonly _paths = new SetMultiMap<InodeNumber, Path>();
 	private readonly _stats = new Map<Path, WatchrStats>();
+	private generation = 0;
 
 	/**
 	 * Gets the paths being watched.
@@ -52,7 +53,19 @@ export class FileSystemStateManager {
 	 * @returns A list of file system events that occurred.
 	 */
 	async update(targetPath: Path): Promise<FileSystemEvent[]> {
-		const nextStats = await this.getStats(targetPath);
+		const generation = this.generation;
+		let nextStats: WatchrStats | undefined;
+
+		try {
+			nextStats = await this.getStats(targetPath);
+		} catch (error: unknown) {
+			if (generation !== this.generation) { return [] }
+
+			throw error;
+		}
+
+		if (generation !== this.generation) { return [] }
+
 		const events = this.determineEvents(this._stats.get(targetPath), nextStats);
 
 		this.updateStats(targetPath, nextStats);
@@ -87,7 +100,7 @@ export class FileSystemStateManager {
 			// Directory to file (1101)
 			case 13: return [ { type: FileSystemEvent.UNLINK_DIR, stats: previousStats! }, { type: FileSystemEvent.ADD, stats: nextStats! } ];
 			// Directory to directory (1100)
-			case 12: return [ { type: FileSystemEvent.UNLINK_DIR, stats: previousStats! }, { type: FileSystemEvent.ADD_DIR, stats: nextStats! } ];
+			case 12: return previousStats!.equals(nextStats!) ? [] : [ { type: FileSystemEvent.UNLINK_DIR, stats: previousStats! }, { type: FileSystemEvent.ADD_DIR, stats: nextStats! } ];
 			// No change (0000) - no old, no new
 			default: return [];
 		}
@@ -108,6 +121,7 @@ export class FileSystemStateManager {
 	 * Resets the file system poller state.
 	 */
 	reset(): void {
+		this.generation++;
 		this._paths.clear();
 		this._stats.clear();
 		this.targetInodes.clear();
@@ -185,11 +199,16 @@ export class FileSystemStateManager {
 	 * @param stats - The new stats for the path.
 	 */
 	private updateStats(targetPath: Path, stats?: WatchrStats) {
+		const previousStats = this._stats.get(targetPath);
+
+		if (previousStats && (!stats || previousStats.inodeNumber !== stats.inodeNumber)) {
+			this._paths.deleteValue(previousStats.inodeNumber, targetPath);
+		}
+
 		if (stats) {
 			this._paths.set(stats.inodeNumber, targetPath);
 			this._stats.set(targetPath, stats);
 		} else {
-			this._paths.deleteValue(this._stats.get(targetPath)?.inodeNumber ?? -1, targetPath);
 			this._stats.delete(targetPath);
 		}
 	}

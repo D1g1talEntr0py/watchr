@@ -11,6 +11,6 @@
 		"./vitest.config.ts",
 		"./eslint.config.ts",
 		"./build/**/*.ts",
-		"./benchmarks/**/*.ts"
+		"./tests/benchmarks/**/*.ts"
 	]
 }

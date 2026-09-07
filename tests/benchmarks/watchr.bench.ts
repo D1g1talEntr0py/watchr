@@ -6,12 +6,12 @@ import { mkdtempSync, rmSync, watch } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { setTimeout as delay } from 'node:timers/promises';
-import { FileSystemStateManager } from '../dist/file-system-state-manager.js';
-import { LockResolver } from '../dist/lock-resolver.js';
-import { WatchrStats } from '../dist/watchr-stats.js';
-import { Watchr } from '../dist/watchr.js';
-import { FileSystemEvent, renameTimeout } from '../dist/constants.js';
-import type { Stats, WatchrOptions } from '../src/@types/index.js';
+import { FileSystemStateManager } from '../../dist/file-system-state-manager.js';
+import { LockResolver } from '../../dist/lock-resolver.js';
+import { WatchrStats } from '../../dist/watchr-stats.js';
+import { Watchr } from '../../dist/watchr.js';
+import { FileSystemEvent, renameTimeout } from '../../dist/constants.js';
+import type { Stats, WatchrOptions } from '../../src/@types/index.js';
 
 type WatchrBenchEvent = 'add' | 'change' | 'unlink' | 'rename' | 'renameDir';
 

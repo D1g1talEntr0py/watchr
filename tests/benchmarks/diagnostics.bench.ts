@@ -5,10 +5,10 @@ import { promises as fs } from 'node:fs';
 import { mkdtempSync, rmSync, watch } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { FileSystem } from '../src/file-system.ts';
-import { Watchr } from '../src/watchr.ts';
-import { timeout } from '../src/decorators/timeout.ts';
-import type { WatchrOptions } from '../src/@types/index.js';
+import { FileSystem } from '../../dist/file-system.js';
+import { Watchr } from '../../dist/watchr.js';
+import { timeout } from '../../dist/decorators/timeout.js';
+import type { WatchrOptions } from '../../src/@types/index.js';
 
 const startupFileCount = 50;
 const fallbackDirectoryCount = 1;

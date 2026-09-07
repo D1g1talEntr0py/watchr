@@ -26,6 +26,7 @@ export default defineConfig({
 		environment: 'node',
 		globals: false,
 		pool: 'threads',
+		fsModuleCache: true,
 		testTimeout: 10000,
 		typecheck: { enabled: false },
     coverage: {

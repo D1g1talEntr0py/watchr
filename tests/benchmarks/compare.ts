@@ -6,8 +6,8 @@ import { mkdtempSync, rmSync, watch } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { setTimeout as delay } from 'node:timers/promises';
-import { Watchr } from '../dist/watchr.js';
-import type { WatchrOptions } from '../src/@types/index';
+import { Watchr } from '../../dist/watchr.js';
+import type { WatchrOptions } from '../../src/@types/index.js';
 
 const renameTimeout = 150;
 

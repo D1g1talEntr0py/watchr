@@ -3,7 +3,8 @@
 import * as esbuild from 'esbuild';
 import ts from 'typescript';
 import { join } from 'node:path';
-import { access, constants, readdir, rm } from 'node:fs/promises';
+import { access, constants, readdir, rm, writeFile } from 'node:fs/promises';
+import { addJavaScriptExtension } from './build/extension-utils.ts';
 
 const outdir = 'dist';
 
@@ -88,5 +89,26 @@ await esbuild.build({
 	external: [ 'temporal-polyfill-lite' ],
 	supported: { decorators: false }
 });
+
+const runtimeModuleBuild = await esbuild.build({
+	entryPoints: fileNames.filter((fileName) => fileName.endsWith('.ts') && !fileName.endsWith('/watchr.ts')),
+	outdir: 'dist',
+	outbase: 'src',
+	format: 'esm',
+	platform: 'node',
+	target: 'esnext',
+	bundle: false,
+	write: false,
+	supported: { decorators: false },
+});
+
+for (const outputFile of runtimeModuleBuild.outputFiles ?? []) {
+	const rewriteImport = (_match: string, prefix: string, modulePath: string, suffix: string) => `${prefix}${addJavaScriptExtension(modulePath)}${suffix}`;
+	const output = outputFile.text
+		.replace(/(from\s+['"])(\.\.?\/[^'"]+?)(['"])/g, rewriteImport)
+		.replace(/(import\s+['"])(\.\.?\/[^'"]+?)(['"])/g, rewriteImport);
+
+	await writeFile(outputFile.path, output);
+}
 
 console.log('⚡ Build complete.');

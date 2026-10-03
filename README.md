@@ -8,8 +8,6 @@
 [![Node.js](https://img.shields.io/node/v/@d1g1tal/watchr)](https://nodejs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript->=6.0.0-blue?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 
-> **⚠️ Important Notice**: This is a personal fork of [`Watcher`](https://github.com/fabiospampinato/watcher) by [Fabio Spampinato](https://github.com/fabiospampinato), modified to fit specific personal needs and experimentation. **Most users should use the original [Watcher](https://github.com/fabiospampinato/watcher) library instead**, an actively maintained upstream project.
-
 A modern, TypeScript-first file system watcher built on Node.js native APIs.
 
 ## Features
@@ -19,19 +17,7 @@ A modern, TypeScript-first file system watcher built on Node.js native APIs.
 - **Rename Detection**: Inode-based correlation of file and directory renames with a configurable window
 - **Abort Signal Support**: Built-in AbortController integration for clean cancellation
 - **File Statistics**: Includes a compact `WatchrStats` snapshot with every event
-- **Zero Native Dependencies**: Pure TypeScript implementation with no native binaries
-
-### Measured
-
-| | watchr | chokidar 5 | @parcel/watcher | `fs.watch` |
-|---|---|---|---|---|
-| readiness, 50k files | 280 ms | 3149 ms | 74 ms (no scan) | 38 ms (no scan) |
-| retained heap / tracked path | ~475 B | ~2000 B | n/a | n/a |
-| write → `change` p50 / p95 | 0.34 / 0.46 ms | 2.26 / 18.0 ms | 50.4 / 50.5 ms | 0.15 / 0.23 ms |
-| create → `add` p50 | 0.39 ms | 25.1 ms | 50.4 ms | 0.16 ms |
-| correlated `rename` events (50 renames) | 50 | 0 | 0 | 0 |
-
-Node 26.10, Linux x64, 28 cores, NVMe; `pnpm bench:compare`, default options. Readiness for @parcel/watcher and `fs.watch` measures subscribe only — they perform no initial scan.
+- **No Native Binaries**: Pure TypeScript implementation with one runtime dependency, `temporal-polyfill-lite`
 
 ## Installation
 
@@ -68,8 +54,7 @@ watcher.on('change', (stats, filePath) => {
   console.log(`File changed: ${filePath}`);
 });
 
-// Close when done
-watcher.close();
+await watcher.readyLock;
 ```
 
 Watchr also supports JavaScript explicit resource management in Node.js 24+:
@@ -101,9 +86,10 @@ Watchr accepts the following options to customize behavior:
 
 - **`ignore`**: Ignore matcher for paths
   - Type: native Node `fs.watch` ignore matcher
-  - Callback form: `(filename: string) => boolean`
+  - Callback form: `(targetPath: string) => boolean`; a top-level callback receives the full path
   - Return `true` to ignore matching names
   - Native form: string and regex patterns are matched against full path and basename
+  - In an array, callback entries are called with both the full path and basename
   - String patterns also support glob-style matching (for example `**/*.log`)
 
 - **`renameTimeout`**: Rename correlation window in milliseconds
@@ -173,7 +159,7 @@ It emits the following events:
 - **`unlink`**: File removed - `(stats, filePath)`
 - **`unlinkDir`**: Directory removed - `(stats, directoryPath)`
 
-All file system events include a `WatchrStats` object containing file metadata.
+All file system events include a `WatchrStats` snapshot with the entry's size, inode number, nanosecond timestamps, and `isFile()`, `isDirectory()`, and `isSymbolicLink()` checks. `modifiedTime` and `changeTime` return `Temporal.Instant` values.
 
 ## API Reference
 
@@ -261,7 +247,7 @@ type FileSystemEvent =
 
 ### Ignore Matching Semantics
 
-- Callback ignore (`(filename) => boolean`): native watcher-style matcher.
+- Callback ignore: a top-level `(targetPath) => boolean` receives the full path; a callback in an array is called with both the full path and basename.
 - String ignore:
   - Exact path and basename checks are supported.
   - Glob patterns are supported via Node path glob semantics.
@@ -429,7 +415,7 @@ On Windows the first `Watchr` constructed in a process emits a one-time `WatchrW
 
 ## Migrating from 3.x
 
-- **No global `Temporal`**: importing Watchr no longer installs a `Temporal` polyfill on `globalThis`. `stats.modifiedTime` / `stats.changeTime` still return a `Temporal.Instant` (the native one when the host provides it, otherwise the bundled polyfill's). If your code relied on the global, add `import 'temporal-polyfill-lite/shim'`.
+- **No global `Temporal`**: importing Watchr no longer installs a `Temporal` polyfill on `globalThis`. `stats.modifiedTime` / `stats.changeTime` still return a `Temporal.Instant` (the native one when the host provides it, otherwise from the `temporal-polyfill-lite` dependency). If your code relied on the global, add `import 'temporal-polyfill-lite/shim'`.
 - **`recursive` defaults to `true`** (was `false`).
 - **`WatchrStats` constructor is private**: build snapshots with `WatchrStats.fromStats(stats)` or `WatchrStats.synthetic(isDirectory)`. New getters: `modifiedTimeNs` / `changeTimeNs` (bigint nanoseconds).
 - **Internal classes and members are gone from the typings** (`FileRenameHandler`, `FileSystemEventManager`, `Watchr#renameWatchr`, …). Only `Watchr`, `WatchrStats`, the event constants and the exported types are public.
@@ -442,19 +428,23 @@ On Windows the first `Watchr` constructed in a process emits a one-time `WatchrW
 - Node.js 24.6.0 or higher
 - TypeScript 6.0.0 or higher (for TypeScript projects)
 
-## Why Use the Original Watcher Instead?
-
-The original [`Watcher`](https://github.com/fabiospampinato/watcher) by Fabio Spampinato is:
-- **Actively maintained** with regular updates and bug fixes
-- **Well-documented** with comprehensive examples and API documentation
-- **Widely used** with far more real-world exposure than this fork
-
-This fork was created for personal experimentation with alternative architectural approaches (like inode-based rename detection patterns and event flow redesigns) and should be considered experimental. Unless you have specific needs that align with these experimental features, you'll be better served by the original library.
-
 ## Additional Acknowledgments
+- [`watcher`](https://github.com/fabiospampinato/watcher) by [Fabio Spampinato](https://github.com/fabiospampinato) - Upstream project this repository was forked from
 - [`chokidar`](https://github.com/paulmillr/chokidar) - Popular file watcher that helped shape API design decisions
 - [`node-watch`](https://github.com/yuanchuan/node-watch) - Minimalist watcher implementation for reference
 
 ## License
 
 MIT © D1g1talEntr0py
+
+## Benchmarks
+
+| | watchr | chokidar 5 | @parcel/watcher | `fs.watch` |
+|---|---|---|---|---|
+| readiness, 50k files | 280 ms | 3149 ms | 74 ms (no scan) | 38 ms (no scan) |
+| retained heap / tracked path | ~475 B | ~2000 B | n/a | n/a |
+| write → `change` p50 / p95 | 0.34 / 0.46 ms | 2.26 / 18.0 ms | 50.4 / 50.5 ms | 0.15 / 0.23 ms |
+| create → `add` p50 | 0.39 ms | 25.1 ms | 50.4 ms | 0.16 ms |
+| correlated `rename` events (50 renames) | 50 | 0 | 0 | 0 |
+
+Node 26.10, Linux x64, 28 cores, NVMe; `pnpm bench:compare`, default options. Readiness for @parcel/watcher and `fs.watch` measures subscribe only; they perform no initial scan.

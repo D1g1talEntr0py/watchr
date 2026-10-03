@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.2](https://github.com/D1g1talEntr0py/watchr/compare/v3.5.1...v3.5.2) - 2026-10-03
+
+
+
+
+### Bug Fixes
+* **core:** recover missed macOS file notifications ([a0f6a07](https://github.com/D1g1talEntr0py/watchr/commit/a0f6a07813df6ccc818d0b466db4944502507716))
+
+
+
+
+
+
+
+
+
+
+
+
 ## [3.5.1](https://github.com/D1g1talEntr0py/watchr/compare/v3.5.0...v3.5.1) - 2026-10-03
 
 
@@ -20,6 +39,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+### Chores
+* **release:** 3.5.1 [skip ci] ([597ba25](https://github.com/D1g1talEntr0py/watchr/commit/597ba258c5ed4a661640f2a48b5893e4f887acbb))
 
 
 

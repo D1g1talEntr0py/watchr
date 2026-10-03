@@ -28,6 +28,7 @@
     "access": "public"
   },
   "type": "module",
+  "sideEffects": false,
   "types": "./dist/watchr.d.ts",
   "exports": {
     ".": {
@@ -36,7 +37,9 @@
     }
   },
   "files": [
-    "./dist",
+    "dist/**/*.js",
+    "dist/**/*.js.map",
+    "dist/**/*.d.ts",
     "README.md",
     "CHANGELOG.md",
     "LICENSE"

@@ -2,8 +2,7 @@
 	"compilerOptions": {
 		"declaration": true,
 		"isolatedDeclarations": true,
-		"isolatedModules": true,
-		"incremental": true,
+		"verbatimModuleSyntax": true,
 		"forceConsistentCasingInFileNames": true,
 		"allowUnusedLabels": false,
 		"allowUnreachableCode": false,
@@ -13,6 +12,9 @@
 		"noImplicitReturns": true,
 		"lib": [ "ESNext" ],
 		"moduleResolution": "Bundler",
+		"paths": {
+			"temporal-polyfill-lite": [ "./src/@types/temporal-polyfill-lite.d.ts" ]
+		},
 		"types": [ "node" ],
 		"rootDir": "./src",
 		"outDir": "./dist"

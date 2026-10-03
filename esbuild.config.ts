@@ -1,12 +1,17 @@
 /// <reference types="node" />
+// Usage: node esbuild.config.ts [--minify]
+// Emits dist/watchr.js (+ .js.map) as the only runtime artifact and dist/**/*.d.ts via the TypeScript Program API.
 
 import * as esbuild from 'esbuild';
 import ts from 'typescript';
 import { join } from 'node:path';
-import { access, constants, readdir, rm, writeFile } from 'node:fs/promises';
-import { addJavaScriptExtension } from './build/extension-utils.ts';
+import { access, constants, readdir, readFile, rm } from 'node:fs/promises';
+import { parseArgs } from 'node:util';
 
+const { values: { minify } } = parseArgs({ options: { minify: { type: 'boolean', default: false } } });
+const { name, version, license, author } = JSON.parse(await readFile('package.json', 'utf8')) as Record<string, string>;
 const outdir = 'dist';
+const fileExtensionPattern = /\.[a-z\d]+$/i;
 
 async function exists(filePath: string) {
 	try {
@@ -35,7 +40,7 @@ const addDeclarationExtensions: ts.TransformerFactory<ts.Bundle | ts.SourceFile>
 		if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
 			const modulePath = node.moduleSpecifier.text;
 
-			if (/^\.\.?\//.test(modulePath) && !/\.[a-z\d]+$/i.test(modulePath)) {
+			if (/^\.\.?\//.test(modulePath) && !fileExtensionPattern.test(modulePath)) {
 				const moduleSpecifier = ts.factory.createStringLiteral(`${modulePath}.js`);
 
 				if (ts.isImportDeclaration(node)) {
@@ -80,35 +85,19 @@ if (allDiagnostics.length > 0) {
 
 await esbuild.build({
 	entryPoints: [ 'src/watchr.ts' ],
-	outdir: 'dist',
+	outdir,
+	outbase: 'src',
 	format: 'esm',
 	platform: 'node',
 	target: 'esnext',
 	bundle: true,
-	outbase: 'src',
+	minify,
+	sourcemap: true,
+	// `/*!` marks the banner as a legal comment so esbuild keeps it when minifying.
+	banner: { js: `/*! ${name} v${version} | ${license} License | (c) ${author} */` },
+	legalComments: 'inline',
 	external: [ 'temporal-polyfill-lite' ],
 	supported: { decorators: false }
 });
 
-const runtimeModuleBuild = await esbuild.build({
-	entryPoints: fileNames.filter((fileName) => fileName.endsWith('.ts') && !fileName.endsWith('/watchr.ts')),
-	outdir: 'dist',
-	outbase: 'src',
-	format: 'esm',
-	platform: 'node',
-	target: 'esnext',
-	bundle: false,
-	write: false,
-	supported: { decorators: false },
-});
-
-for (const outputFile of runtimeModuleBuild.outputFiles ?? []) {
-	const rewriteImport = (_match: string, prefix: string, modulePath: string, suffix: string) => `${prefix}${addJavaScriptExtension(modulePath)}${suffix}`;
-	const output = outputFile.text
-		.replace(/(from\s+['"])(\.\.?\/[^'"]+?)(['"])/g, rewriteImport)
-		.replace(/(import\s+['"])(\.\.?\/[^'"]+?)(['"])/g, rewriteImport);
-
-	await writeFile(outputFile.path, output);
-}
-
-console.log('⚡ Build complete.');
+console.log(`⚡ Build complete${minify ? ' (minified)' : ''}.`);

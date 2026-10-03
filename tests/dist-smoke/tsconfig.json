@@ -1,0 +1,15 @@
+{
+	"compilerOptions": {
+		"noEmit": true,
+		"strict": true,
+		"exactOptionalPropertyTypes": true,
+		"noUncheckedIndexedAccess": true,
+		"module": "ESNext",
+		"moduleResolution": "Bundler",
+		"target": "ESNext",
+		"lib": [ "ES2024", "DOM" ],
+		"types": [ "node" ],
+		"typeRoots": [ "../../node_modules/@types" ]
+	},
+	"include": [ "./*.ts" ]
+}

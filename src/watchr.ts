@@ -239,7 +239,7 @@ class Watchr extends EventEmitter<WatchrEventMap> implements Closable {
 		this.#readyReject(new Error('watcher closed before becoming ready.'));
 		this.#renameHandler.reset();
 		this.#roots.clear();
-		this.#watchersClose();
+		this.watchersClose();
 		this.#clearRestorableWatchers();
 
 		this.emit(WatcherEvent.CLOSE);
@@ -360,12 +360,11 @@ class Watchr extends EventEmitter<WatchrEventMap> implements Closable {
 	 * Closes all watchers for a given folder path
 	 * @param folderPath The folder path to close watchers for
 	 * @param filePath The file path to close watchers for
-	 * @internal
 	 */
-	#watchersClose(folderPath?: Path, filePath?: Path): void {
+	watchersClose(folderPath?: Path, filePath?: Path): void {
 		if (!folderPath) {
 			for (const folderPath of [ ...this.#watchers.keys() ]) {
-				this.#watchersClose(folderPath, filePath);
+				this.watchersClose(folderPath, filePath);
 			}
 		} else {
 			// It's important to clone the array, as items will be deleted from it
@@ -455,7 +454,7 @@ class Watchr extends EventEmitter<WatchrEventMap> implements Closable {
 			const eventManager = await FileSystemEventManager.newInstance(this.#renameHandler.fileStateManager, this, config, {
 				renameHandler: this.#renameHandler,
 				reportError: (error) => this.#error(error),
-				closeWatchers: (folderPath?: Path, filePath?: Path) => this.#watchersClose(folderPath, filePath)
+				closeWatchers: (folderPath?: Path, filePath?: Path) => this.watchersClose(folderPath, filePath)
 			});
 			config.eventManager = eventManager;
 

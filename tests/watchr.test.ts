@@ -72,11 +72,13 @@ describe('Watchr', () => {
 			watchr.close();
 		});
 
-		it('should not expose implementation members at runtime', () => {
+		it('exposes watchersClose as a public method', () => {
 			const watchr = new Watchr();
-			for (const member of [ 'renameWatchr', 'addWatcherConfig', 'error', 'emitEvent', 'watchersClose' ]) {
+			for (const member of [ 'renameWatchr', 'addWatcherConfig', 'error', 'emitEvent' ]) {
 				expect(member in watchr).toBe(false);
 			}
+			expect(typeof watchr.watchersClose).toBe('function');
+			watchr.watchersClose();
 			watchr.close();
 		});
 

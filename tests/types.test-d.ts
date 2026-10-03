@@ -28,6 +28,10 @@ describe('Watchr typings', () => {
 		});
 	});
 
+	it('exposes watchersClose in the public API', () => {
+		expectTypeOf(watcher.watchersClose).toEqualTypeOf<(folderPath?: Path, filePath?: Path) => void>();
+	});
+
 	it('still accepts untyped event names', () => {
 		watcher.on('custom', (...args) => {
 			expectTypeOf(args).toEqualTypeOf<any[]>();

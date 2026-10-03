@@ -8,20 +8,30 @@
 [![Node.js](https://img.shields.io/node/v/@d1g1tal/watchr)](https://nodejs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript->=6.0.0-blue?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 
-> **⚠️ Important Notice**: This is a personal fork of [`Watcher`](https://github.com/fabiospampinato/watcher) by [Fabio Spampinato](https://github.com/fabiospampinato), modified to fit specific personal needs and experimentation. **Most users should use the original [Watcher](https://github.com/fabiospampinato/watcher) library instead**, which is actively maintained, battle-tested, and feature-complete.
+> **⚠️ Important Notice**: This is a personal fork of [`Watcher`](https://github.com/fabiospampinato/watcher) by [Fabio Spampinato](https://github.com/fabiospampinato), modified to fit specific personal needs and experimentation. **Most users should use the original [Watcher](https://github.com/fabiospampinato/watcher) library instead**, an actively maintained upstream project.
 
 A modern, TypeScript-first file system watcher built on Node.js native APIs.
 
 ## Features
 
-- **Native Performance**: Built on Node.js native `fs.watch` with recursive watching support
-- **TypeScript First**: Written entirely in TypeScript with comprehensive type definitions
+- **TypeScript First**: Written entirely in TypeScript with comprehensive type definitions and a typed `EventEmitter<WatchrEventMap>`
 - **Event-Driven Architecture**: Clean, EventEmitter-based API for handling file system events
-- **Rename Detection**: Optional detection of file and directory renames with configurable timeouts
+- **Rename Detection**: Inode-based correlation of file and directory renames with a configurable window
 - **Abort Signal Support**: Built-in AbortController integration for clean cancellation
-- **File Statistics**: Includes file stats with all events for enhanced metadata access
-- **Supported Platforms**: Linux and macOS only. Windows is not supported.
+- **File Statistics**: Includes a compact `WatchrStats` snapshot with every event
 - **Zero Native Dependencies**: Pure TypeScript implementation with no native binaries
+
+### Measured
+
+| | watchr | chokidar 5 | @parcel/watcher | `fs.watch` |
+|---|---|---|---|---|
+| readiness, 50k files | 280 ms | 3149 ms | 74 ms (no scan) | 38 ms (no scan) |
+| retained heap / tracked path | ~475 B | ~2000 B | n/a | n/a |
+| write → `change` p50 / p95 | 0.34 / 0.46 ms | 2.26 / 18.0 ms | 50.4 / 50.5 ms | 0.15 / 0.23 ms |
+| create → `add` p50 | 0.39 ms | 25.1 ms | 50.4 ms | 0.16 ms |
+| correlated `rename` events (50 renames) | 50 | 0 | 0 | 0 |
+
+Node 26.10, Linux x64, 28 cores, NVMe; `pnpm bench:compare`, default options. Readiness for @parcel/watcher and `fs.watch` measures subscribe only — they perform no initial scan.
 
 ## Installation
 
@@ -81,17 +91,13 @@ import { Watchr } from '@d1g1tal/watchr';
 
 Watchr accepts the following options to customize behavior:
 
-- **`persistent`**: Whether to keep the Node.js process running while watching
-  - Default: `true` (Node.js native watcher default)
-  - When `true`, prevents the process from exiting while the watcher is active
+- **`recursive`**: Watch nested directories
+  - Default: `true`
+  - The initial scan honours it too: `false` limits both the scan and live events to direct children of the root
 
-- **`recursive`**: Enable recursive watching of subdirectories
+- **`ignoreInitial`**: Skip the events produced by the initial scan
   - Default: `false`
-  - Uses Node.js native recursive watching
-
-- **`encoding`**: Character encoding for file paths
-  - Default: `'utf8'`
-  - Supports any Node.js BufferEncoding
+  - When `true`, only changes after `ready` emit events
 
 - **`ignore`**: Ignore matcher for paths
   - Type: native Node `fs.watch` ignore matcher
@@ -100,20 +106,57 @@ Watchr accepts the following options to customize behavior:
   - Native form: string and regex patterns are matched against full path and basename
   - String patterns also support glob-style matching (for example `**/*.log`)
 
-- **`ignoreInitial`**: Skip initial scan events when starting to watch
-  - Default: `false`
-  - When `true`, only new changes after watching starts will emit events
+- **`renameTimeout`**: Rename correlation window in milliseconds
+  - Default: `150`
+  - An `unlink` and an `add` with the same inode inside the window become one `rename`/`renameDir`
+  - Consequence: only an `add` whose inode a tracked path gave up inside the window is delayed (a `change` during that hold folds into the `add`); `add` for a brand-new file or directory is emitted immediately, so short-lived files surface as `add` + `unlink`
+  - `0` disables correlation; `add`/`unlink` are emitted immediately
 
-- **`throwIfNoEntry`**: Throw immediately if watched path does not exist
+- **`statTimeout`**: Timeout in milliseconds for each stat performed while polling live watcher events
+  - Default: `1000`
+  - The initial scan has no timeout (it is bounded only by the watcher's abort signal)
+
+- **`fallbackScanInterval`**: Minimum interval in milliseconds between fallback snapshot scans of a watched root
+  - Default: `50`
+  - A fallback scan (a full directory read) runs when the native watcher reports an event without a usable file name
+
+- **`followSymlinks`**: Whether symbolic links are followed
+  - Default: `true`
+  - `true`: a link whose target is a file or directory is reported under the link's own path with the target's stats; entries discovered as links during a scan report `stats.isSymbolicLink() === true`; symlinked directories are scanned unless they point at an ancestor or an already-scanned directory
+  - `false`: symlinks are skipped by the initial scan and ignored when they appear live
+  - Changes *inside* a symlinked directory are only seen if the native watcher reports them
+
+- **`persistent`**: Whether to keep the Node.js process running while watching
+  - Default: `true` (Node.js native watcher default)
+
+- **`encoding`**: Character encoding for file paths
+  - Default: `'utf8'`
+  - Supports any Node.js BufferEncoding
+
+- **`throwIfNoEntry`**: Throw immediately if a watched path does not exist
   - Default: Node.js default (`true`)
-
-- **`renameTimeout`**: Timeout in milliseconds for rename detection
-  - Default: `150ms`
-  - How long to wait to detect if separate add/unlink events are actually a rename
 
 ## Events
 
-Watchr extends Node.js EventEmitter and emits the following events:
+Watchr extends Node.js `EventEmitter<WatchrEventMap>`, so listener arguments are typed per event name:
+
+```typescript
+import { Watchr, type WatchrEventMap } from '@d1g1tal/watchr';
+
+const watcher = new Watchr('/path/to/watch');
+
+watcher.on('rename', (stats, from, to) => {
+  // stats: WatchrStats, from: string, to: string
+});
+
+watcher.on('add', (stats, filePath) => {
+  console.log(filePath, stats.size);
+});
+
+type RenameArgs = WatchrEventMap['rename']; // [stats: WatchrStats, targetPath: string, targetPathNext: string]
+```
+
+It emits the following events:
 
 ### Watcher Events
 - **`ready`**: Emitted when the watcher has finished initialization
@@ -165,11 +208,8 @@ isIgnored(targetPath: string, ignore?: WatchIgnore): boolean
 // Access the abort signal for cancellation
 get abortSignal(): AbortSignal
 
-// Get a promise that resolves when ready
+// Get a promise that resolves when ready (rejects if initialization fails)
 get readyLock(): Promise<void>
-
-// Access file rename handler
-get renameWatchr(): FileRenameHandler
 ```
 
 ### Type Definitions
@@ -177,12 +217,33 @@ get renameWatchr(): FileRenameHandler
 ```typescript
 type WatchrOptions = {
   persistent?: boolean;
+  /** Watch (and initially scan) nested directories. Defaults to `true`. */
   recursive?: boolean;
   encoding?: BufferEncoding;
-  ignore?: ((filename: string) => boolean) | string | RegExp | Array<string | RegExp | ((filename: string) => boolean)>;
+  ignore?: WatchIgnore; // ((filename: string) => boolean) | string | RegExp | Array<...>
   ignoreInitial?: boolean;
   throwIfNoEntry?: boolean;
   renameTimeout?: number;
+  /** Per-stat timeout (ms) for live polls; the initial scan is not time-limited. Defaults to 1000. */
+  statTimeout?: number;
+  /** Minimum interval (ms) between fallback snapshot scans. Defaults to 50. */
+  fallbackScanInterval?: number;
+  /** Follow symbolic links. Defaults to `true`. */
+  followSymlinks?: boolean;
+};
+
+type WatchrEventMap = {
+  add: [stats: WatchrStats, targetPath: string];
+  addDir: [stats: WatchrStats, targetPath: string];
+  change: [stats: WatchrStats, targetPath: string];
+  unlink: [stats: WatchrStats, targetPath: string];
+  unlinkDir: [stats: WatchrStats, targetPath: string];
+  rename: [stats: WatchrStats, targetPath: string, targetPathNext: string];
+  renameDir: [stats: WatchrStats, targetPath: string, targetPathNext: string];
+  all: [event: FileSystemEvent, stats: WatchrStats, targetPath: string, targetPathNext?: string];
+  error: [error: Error];
+  ready: [];
+  close: [];
 };
 
 type Handler = (
@@ -349,6 +410,33 @@ import { Watchr } from '@d1g1tal/watchr';
 
 These examples watch until the first matching event after readiness. Leaving the `using` block calls `watcher[Symbol.dispose]()` automatically. Disposal is synchronous, idempotent, emits `close` once, aborts `abortSignal`, and has the same behavior as `watcher.close()`.
 
+## Error Handling
+
+- **Listener exceptions**: an exception thrown by any event listener (including the `handler` passed to the constructor) is caught and re-emitted as `error`; it never propagates out of the watcher.
+- **No `error` listener**: if there is no `error` listener (or the `error` listener itself throws), the error is reported via `process.emitWarning` with `name: 'WatchrWarning'` and `code: 'WATCHR_UNHANDLED_ERROR'`. Watchr never raises `uncaughtException`.
+- **Initialization failure** (for example a missing root path): `readyLock` rejects, `error` is emitted, then the watcher closes and emits `close`.
+- **Per-path failures during the initial scan**: a path whose stat fails is reported as `error` with the message `Initial scan skipped path.` (the underlying error is in `cause`) and the scan continues.
+- **Watched root deleted**: `unlinkDir` is emitted for the root, then Watchr retries re-attaching with backoff (100 → 250 → 500 → 1000 → 2000 ms, repeating the last delay) and emits `addDir` for the root once it reappears.
+
+## Platform Support
+
+| Tier | Platforms | Guarantee |
+|---|---|---|
+| 1 | Linux, macOS | CI-blocking; regressions are release blockers |
+| 2 | Windows | Best-effort; CI job is non-blocking; no SLA. WSL is recommended for Tier 1 behavior |
+
+On Windows the first `Watchr` constructed in a process emits a one-time `WatchrWarning` with code `WATCHR_PLATFORM_TIER2`; the Windows CI job runs the integration and regression suites but never blocks a merge.
+
+## Migrating from 3.x
+
+- **No global `Temporal`**: importing Watchr no longer installs a `Temporal` polyfill on `globalThis`. `stats.modifiedTime` / `stats.changeTime` still return a `Temporal.Instant` (the native one when the host provides it, otherwise the bundled polyfill's). If your code relied on the global, add `import 'temporal-polyfill-lite/shim'`.
+- **`recursive` defaults to `true`** (was `false`).
+- **`WatchrStats` constructor is private**: build snapshots with `WatchrStats.fromStats(stats)` or `WatchrStats.synthetic(isDirectory)`. New getters: `modifiedTimeNs` / `changeTimeNs` (bigint nanoseconds).
+- **Internal classes and members are gone from the typings** (`FileRenameHandler`, `FileSystemEventManager`, `Watchr#renameWatchr`, …). Only `Watchr`, `WatchrStats`, the event constants and the exported types are public.
+- **New options**: `statTimeout`, `fallbackScanInterval`, `followSymlinks`.
+- **`change` may fold into a pending `add`**: an `add` that may still pair with an `unlink` as a rename is held for up to `renameTimeout`; a `change` for the same path during that hold is absorbed into the `add`. Brand-new inodes are never held.
+- **Throwing listeners no longer crash the process**: see [Error Handling](#error-handling).
+
 ## Requirements
 
 - Node.js 24.6.0 or higher
@@ -357,11 +445,9 @@ These examples watch until the first matching event after readiness. Leaving the
 ## Why Use the Original Watcher Instead?
 
 The original [`Watcher`](https://github.com/fabiospampinato/watcher) by Fabio Spampinato is:
-- **Production-ready** with extensive real-world usage and testing
 - **Actively maintained** with regular updates and bug fixes
 - **Well-documented** with comprehensive examples and API documentation
-- **Battle-tested** across many projects and platforms
-- **Feature-complete** with robust edge case handling
+- **Widely used** with far more real-world exposure than this fork
 
 This fork was created for personal experimentation with alternative architectural approaches (like inode-based rename detection patterns and event flow redesigns) and should be considered experimental. Unless you have specific needs that align with these experimental features, you'll be better served by the original library.
 

@@ -1,2 +1,4 @@
 allowBuilds:
+  # prebuilt binary ships via optional deps; the node-gyp fallback build is not needed
+  '@parcel/watcher': false
   esbuild: true

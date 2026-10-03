@@ -1,241 +1,132 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RetryQueue } from '../src/retry-queue';
-import { fileDescriptorLimit } from '../src/constants';
+
+vi.mock('../src/constants', () => ({ maxConcurrentStats: 2 }));
 
 describe('RetryQueue', () => {
-  let retryQueue: RetryQueue;
+	let queue: RetryQueue;
+	let leases: Disposable[];
 
-  beforeEach(() => {
-    retryQueue = new RetryQueue();
-  });
+	const acquire = async (signal?: AbortSignal): Promise<Disposable> => {
+		const lease = await queue.schedule(signal);
+		leases.push(lease);
+		return lease;
+	};
 
-  describe('schedule', () => {
-    it('should reject without queueing when the signal is already aborted', async () => {
-      const abortController = new AbortController();
-      abortController.abort();
+	beforeEach(() => {
+		vi.useFakeTimers();
+		queue = new RetryQueue();
+		leases = [];
+	});
 
-      await expect(retryQueue.schedule(abortController.signal)).rejects.toMatchObject({ name: 'AbortError' });
-      expect(retryQueue['pendingQueue'].size).toBe(0);
-      expect(retryQueue['activeQueue'].size).toBe(0);
-    });
+	afterEach(() => {
+		for (const lease of leases) { lease[Symbol.dispose]() }
+		vi.useRealTimers();
+	});
 
-    it('should resolve immediately if active queue is not under pressure', async () => {
-      const promise = retryQueue.schedule<string>();
-      const lease = await promise;
+	it('admits tasks below capacity without starting a timer', async () => {
+		await acquire();
+		await acquire();
+		expect(vi.getTimerCount()).toBe(0);
+	});
 
-      expect(retryQueue['activeQueue'].size).toBe(1);
-      expect(lease('done')).toBe('done');
-      expect(retryQueue['activeQueue'].size).toBe(0);
-    });
+	it('rejects an already aborted signal without occupying capacity', async () => {
+		await expect(queue.schedule(AbortSignal.abort())).rejects.toMatchObject({ name: 'AbortError' });
+		await acquire();
+		await acquire();
+		expect(vi.getTimerCount()).toBe(0);
+	});
 
-    it('should remove a canceled task before queue admission', async () => {
-      const currentLimit = fileDescriptorLimit;
-      for (let i = 0; i < currentLimit / 2; i++) {
-        retryQueue['activeQueue'].add(vi.fn());
-      }
+	it('holds excess tasks until a lease is released, in admission order', async () => {
+		const first = await acquire();
+		const second = await acquire();
+		const admitted: string[] = [];
+		const third = acquire().then(() => { admitted.push('third') });
+		const fourth = acquire().then(() => { admitted.push('fourth') });
 
-      const abortController = new AbortController();
-      const removeEventListenerSpy = vi.spyOn(abortController.signal, 'removeEventListener');
-      const promise = retryQueue.schedule(abortController.signal);
+		await vi.advanceTimersByTimeAsync(100);
+		expect(admitted).toEqual([]);
+		expect(vi.getTimerCount()).toBe(1);
 
-      expect(retryQueue['pendingQueue'].size).toBe(1);
-      abortController.abort();
+		first[Symbol.dispose]();
+		await third;
+		expect(admitted).toEqual([ 'third' ]);
+		expect(vi.getTimerCount()).toBe(1);
 
-      await expect(promise).rejects.toMatchObject({ name: 'AbortError' });
-      expect(retryQueue['pendingQueue'].size).toBe(0);
-      expect(removeEventListenerSpy).toHaveBeenCalledWith('abort', expect.any(Function));
-    });
+		second[Symbol.dispose]();
+		await fourth;
+		expect(admitted).toEqual([ 'third', 'fourth' ]);
+		expect(vi.getTimerCount()).toBe(0);
+	});
 
-    it('should add to pending queue if active queue is under pressure', async () => {
-      const currentLimit = fileDescriptorLimit;
-      for (let i = 0; i < currentLimit / 2; i++) {
-        retryQueue['activeQueue'].add(vi.fn());
-      }
+	it('removes a cancelled pending task and stops its safety timer', async () => {
+		const first = await acquire();
+		await acquire();
+		const controller = new AbortController();
+		const removeListener = vi.spyOn(controller.signal, 'removeEventListener');
+		const pending = queue.schedule(controller.signal);
+		const rejection = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
 
-      const promise = retryQueue.schedule();
+		controller.abort();
+		await rejection;
+		expect(removeListener).toHaveBeenCalledWith('abort', expect.any(Function));
+		expect(vi.getTimerCount()).toBe(0);
 
-      expect(retryQueue['pendingQueue'].size).toBe(1);
-      await promise;
-      expect(retryQueue['pendingQueue'].size).toBe(0);
-    });
+		first[Symbol.dispose]();
+		await acquire();
+	});
 
-    it('should dispose an admitted lease idempotently', async () => {
-      const lease = await retryQueue.schedule();
+	it('keeps remaining pending tasks queued when one is cancelled', async () => {
+		const first = await acquire();
+		await acquire();
+		const controller = new AbortController();
+		const cancelled = queue.schedule(controller.signal);
+		const rejection = expect(cancelled).rejects.toMatchObject({ name: 'AbortError' });
+		const pending = acquire();
 
-      expect(retryQueue['activeQueue'].size).toBe(1);
-      lease.dispose();
-      lease.dispose();
-      lease[Symbol.dispose]();
+		controller.abort();
+		await rejection;
+		expect(vi.getTimerCount()).toBe(1);
 
-      expect(retryQueue['activeQueue'].size).toBe(0);
-    });
+		first[Symbol.dispose]();
+		await pending;
+		expect(vi.getTimerCount()).toBe(0);
+	});
 
-    it('should retain an admitted lease when the signal aborts until released', async () => {
-      const abortController = new AbortController();
-      const removeEventListenerSpy = vi.spyOn(abortController.signal, 'removeEventListener');
-      const lease = await retryQueue.schedule(abortController.signal);
+	it('retains an admitted lease after its signal aborts', async () => {
+		const controller = new AbortController();
+		const removeListener = vi.spyOn(controller.signal, 'removeEventListener');
+		const first = await acquire(controller.signal);
+		await acquire();
+		expect(removeListener).toHaveBeenCalledWith('abort', expect.any(Function));
 
-      expect(retryQueue['activeQueue'].size).toBe(1);
-      abortController.abort();
-      expect(retryQueue['activeQueue'].size).toBe(1);
-      lease.dispose();
+		controller.abort();
+		const admitted = vi.fn();
+		const pending = acquire().then(admitted);
+		await vi.advanceTimersByTimeAsync(50);
+		expect(admitted).not.toHaveBeenCalled();
 
-      expect(retryQueue['activeQueue'].size).toBe(0);
-      expect(removeEventListenerSpy).toHaveBeenCalledWith('abort', expect.any(Function));
-    });
+		first[Symbol.dispose]();
+		await pending;
+		expect(admitted).toHaveBeenCalledOnce();
+	});
 
-    it('should release leases on normal and exceptional scope exit', async () => {
-      {
-        using lease = await retryQueue.schedule();
-        expect(typeof lease).toBe('function');
-        expect(retryQueue['activeQueue'].size).toBe(1);
-      }
-      expect(retryQueue['activeQueue'].size).toBe(0);
+	it('does not release another task when a lease is disposed twice', async () => {
+		const first = await acquire();
+		await acquire();
+		const third = acquire();
+		const admitted = vi.fn();
+		const fourth = acquire().then(admitted);
 
-      await expect((async () => {
-        using lease = await retryQueue.schedule();
-        expect(typeof lease).toBe('function');
-        throw new Error('scope failed');
-      })()).rejects.toThrow('scope failed');
-      expect(retryQueue['activeQueue'].size).toBe(0);
-    });
+		first[Symbol.dispose]();
+		const thirdLease = await third;
+		first[Symbol.dispose]();
+		await vi.advanceTimersByTimeAsync(50);
+		expect(admitted).not.toHaveBeenCalled();
 
-    it('should not admit canceled pending work on later queue processing', async () => {
-      const currentLimit = fileDescriptorLimit;
-      for (let i = 0; i < currentLimit / 2; i++) {
-        retryQueue['activeQueue'].add(vi.fn());
-      }
-
-      const abortController = new AbortController();
-      const canceledPromise = retryQueue.schedule(abortController.signal);
-      const retainedPromise = retryQueue.schedule();
-
-      expect(retryQueue['pendingQueue'].size).toBe(2);
-      abortController.abort();
-      await expect(canceledPromise).rejects.toMatchObject({ name: 'AbortError' });
-      expect(retryQueue['pendingQueue'].size).toBe(1);
-      expect(retryQueue['intervalId']).toBeDefined();
-
-      retryQueue['activeQueue'].clear();
-      retryQueue['processQueue']();
-      const retainedLease = await retainedPromise;
-
-      expect(retryQueue['pendingQueue'].size).toBe(0);
-      expect(retryQueue['activeQueue'].size).toBe(1);
-      retainedLease.dispose();
-    });
-  });
-
-  describe('add', () => {
-    it('should add to pending queue and process immediately if active queue is not under pressure', () => {
-      const resolver = vi.fn();
-      retryQueue['add'](resolver);
-
-      expect(retryQueue['pendingQueue'].size).toBe(0);
-      expect(retryQueue['activeQueue'].size).toBe(1);
-    });
-
-    it('should set an interval if active queue is under pressure', () => {
-      const currentLimit = fileDescriptorLimit;
-      for (let i = 0; i < currentLimit / 2; i++) {
-        retryQueue['activeQueue'].add(vi.fn());
-      }
-
-      const resolver = vi.fn();
-      retryQueue['add'](resolver);
-
-      expect(retryQueue['pendingQueue'].size).toBe(1);
-      expect(retryQueue['intervalId']).toBeDefined();
-    });
-
-    it('should not set a new interval if one is already running', () => {
-      const currentLimit = fileDescriptorLimit;
-      for (let i = 0; i < currentLimit / 2; i++) {
-        retryQueue['activeQueue'].add(vi.fn());
-      }
-
-      const resolver1 = vi.fn();
-      retryQueue['add'](resolver1);
-      const intervalId = retryQueue['intervalId'];
-      expect(intervalId).toBeDefined();
-
-      const resolver2 = vi.fn();
-      retryQueue['add'](resolver2);
-
-      expect(retryQueue['intervalId']).toBe(intervalId);
-      expect(retryQueue['pendingQueue'].size).toBe(2);
-    });
-  });
-
-  describe('processQueue', () => {
-    it('should process items from pending queue to active queue', () => {
-      const resolver = vi.fn();
-      retryQueue['pendingQueue'].add(resolver);
-
-      retryQueue['processQueue']();
-
-      expect(retryQueue['pendingQueue'].size).toBe(0);
-      expect(retryQueue['activeQueue'].size).toBe(1);
-    });
-
-    it('should stop processing if active queue is full', () => {
-      const currentLimit = fileDescriptorLimit;
-      for (let i = 0; i < currentLimit; i++) {
-        retryQueue['activeQueue'].add(vi.fn());
-      }
-
-      const resolver = vi.fn();
-      retryQueue['pendingQueue'].add(resolver);
-
-      retryQueue['processQueue']();
-
-      expect(retryQueue['pendingQueue'].size).toBe(1);
-      expect(retryQueue['activeQueue'].size).toBe(currentLimit);
-    });
-
-    it('should stop processing mid-way if active queue becomes full', () => {
-      const currentLimit = fileDescriptorLimit;
-      // Set active queue to be almost full
-      for (let i = 0; i < currentLimit - 1; i++) {
-        retryQueue['activeQueue'].add(vi.fn());
-      }
-
-      // Add two items to pending queue. Only one should be processed.
-      const resolver1 = vi.fn();
-      const resolver2 = vi.fn();
-      retryQueue['pendingQueue'].add(resolver1);
-      retryQueue['pendingQueue'].add(resolver2);
-
-      retryQueue['processQueue']();
-
-      // One item should have been moved from pending to active
-      expect(retryQueue['activeQueue'].size).toBe(currentLimit);
-      expect(retryQueue['pendingQueue'].size).toBe(1);
-
-      // Check that only the first resolver was called
-      expect(resolver1).toHaveBeenCalledTimes(1);
-      expect(resolver2).not.toHaveBeenCalled();
-    });
-
-    it('should reset the interval if pending queue is empty', () => {
-      retryQueue['processQueue']();
-
-      expect(retryQueue['intervalId']).toBeUndefined();
-    });
-  });
-
-  describe('reset', () => {
-    it('should clear the interval if it exists', () => {
-      retryQueue['intervalId'] = setInterval(() => {}, RetryQueue['interval']);
-      retryQueue['reset']();
-
-      expect(retryQueue['intervalId']).toBeUndefined();
-    });
-
-    it('should do nothing if interval does not exist', () => {
-      retryQueue['reset']();
-
-      expect(retryQueue['intervalId']).toBeUndefined();
-    });
-  });
+		thirdLease[Symbol.dispose]();
+		await fourth;
+		expect(admitted).toHaveBeenCalledOnce();
+		expect(vi.getTimerCount()).toBe(0);
+	});
 });

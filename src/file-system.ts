@@ -1,11 +1,11 @@
-import { readdir, stat } from 'node:fs/promises';
+import { lstatSync, statSync } from 'node:fs';
+import { lstat, readdir, realpath, stat } from 'node:fs/promises';
 import { join, normalize, sep } from 'node:path';
+import { raceWithAbort } from './utils';
 import { RetryQueue } from './retry-queue';
-import { timeout } from './decorators/timeout';
 import { FileSystemEntries } from './file-system-entries';
 import { setTimeout as setAsyncTimeout } from 'node:timers/promises';
-import type { DirectoryReadOptions, NodeError, NodeErrorCode, Stats } from './@types/index';
-import { raceWithAbort } from './utils';
+import type { DirectoryReadOptions, NodeError, NodeErrorCode, StatOptions, Stats } from './@types/index';
 
 const maxConcurrentDirectoryReads = 8;
 const missingStat = Symbol('missing-stat');
@@ -21,10 +21,11 @@ const isNodeError = (error: unknown): error is NodeError => error instanceof Err
 
 /**
  * A class that provides methods for interacting with the file system.
+ * @internal
  */
 export class FileSystem {
-	private static readonly retryQueue = new RetryQueue();
-	private static readonly maxStatRetries = 10;
+	static readonly #retryQueue = new RetryQueue();
+	static readonly #maxStatRetries = 10;
 
 	private constructor () {
 		throw new Error('This class cannot be instantiated');
@@ -36,7 +37,7 @@ export class FileSystem {
 	 * @param param1 - Options for reading the directory.
 	 * @returns A promise that resolves to a FileSystemEntries object containing the directory contents.
 	 */
-	static async readDirectory(rootPath: string, { ignore, recursive = true, signal }: DirectoryReadOptions & { recursive?: boolean } = {}): Promise<FileSystemEntries> {
+	static async readDirectory(rootPath: string, { ignore, recursive = true, signal, followSymlinks = true }: DirectoryReadOptions = {}): Promise<FileSystemEntries> {
 		const fileSystemEntries = new FileSystemEntries();
 
 		if (signal?.aborted) { return fileSystemEntries }
@@ -44,40 +45,62 @@ export class FileSystem {
 		const shouldIgnore = ignore ?? (() => false);
 		rootPath = normalize(rootPath);
 
-		const readWithNativeRecursion = async () => {
+		// Real paths of symlinked directories already scanned (seeded with the root); regular directories are never realpath'd.
+		let visitedRealPaths: Set<string> | undefined;
+		let rootRealPath: string | undefined;
+
+		/**
+		 * Resolves a symlink entry: records it as a file or directory (dangling/unreadable links are skipped).
+		 * @param subPath - The symlink path.
+		 * @returns True when the link points at a directory that should be traversed.
+		 */
+		const addSymlink = async (subPath: string): Promise<boolean> => {
+			let stats: Stats | undefined;
+
 			try {
-				if (signal?.aborted) { return true }
+				stats = await FileSystem.getStats(subPath, { signal });
+			} catch {
+				return false;
+			}
 
-				const entries = await readdir(rootPath, { recursive, withFileTypes: true });
+			if (signal?.aborted || stats === undefined) { return false }
 
-				for (const entry of entries) {
-					if (signal?.aborted) { break }
+			if (stats.isDirectory()) {
+				fileSystemEntries.addDirectory(subPath).addSymlink(subPath);
 
-					const subPath = normalize(join(typeof entry.parentPath === 'string' ? entry.parentPath : rootPath, entry.name));
+				return recursive;
+			}
 
-					if (shouldIgnore(subPath)) { continue }
+			if (stats.isFile()) { fileSystemEntries.addFile(subPath).addSymlink(subPath) }
 
-					if (entry.isDirectory()) {
-						fileSystemEntries.addDirectory(subPath);
-					} else if (entry.isFile()) {
-						fileSystemEntries.addFile(subPath);
-					}
-				}
+			return false;
+		};
+
+		/**
+		 * Decides whether a symlinked directory may be traversed without revisiting a directory or looping back to an ancestor.
+		 * @param subPath - The symlink path.
+		 * @returns True when the link's real path has not been visited yet.
+		 */
+		const shouldTraverseSymlink = async (subPath: string): Promise<boolean> => {
+			try {
+				rootRealPath ??= await realpath(rootPath);
+				visitedRealPaths ??= new Set([ rootRealPath ]);
+
+				const realTarget = await realpath(subPath);
+
+				// Reject links to an ancestor even when its real path has not been visited.
+				if (visitedRealPaths.has(realTarget) || !FileSystem.isSubPath(rootRealPath, realTarget) || FileSystem.isSubPath(realTarget, subPath)) { return false }
+
+				visitedRealPaths.add(realTarget);
 
 				return true;
-			} catch (error: unknown) {
-				const errorCode = isNodeError(error) && typeof error.code === 'string' ? error.code : undefined;
-
-				if (errorCode === undefined || !recursiveReadUnsupportedErrorCodes.has(errorCode)) {
-					throw error;
-				}
-
+			} catch {
 				return false;
 			}
 		};
 
-		const readWithManualTraversal = async () => {
-			const pendingDirectories = [ rootPath ];
+		const readWithManualTraversal = async (startPath: string) => {
+			const pendingDirectories = [ startPath ];
 
 			const readNextDirectory = async () => {
 				while (!signal?.aborted) {
@@ -99,6 +122,8 @@ export class FileSystem {
 							if (recursive) { pendingDirectories.push(subPath) }
 						} else if (directoryEntry.isFile()) {
 							fileSystemEntries.addFile(subPath);
+						} else if (followSymlinks && directoryEntry.isSymbolicLink() && await addSymlink(subPath) && await shouldTraverseSymlink(subPath)) {
+							pendingDirectories.push(subPath);
 						}
 					}
 				}
@@ -107,52 +132,121 @@ export class FileSystem {
 			await Promise.all(Array.from({ length: maxConcurrentDirectoryReads }, readNextDirectory));
 		};
 
-		const nativeRecursiveReadUsed = ignore === undefined && await readWithNativeRecursion();
+		const readWithNativeRecursion = async () => {
+			try {
+				if (signal?.aborted) { return true }
 
-		if (!nativeRecursiveReadUsed) { await readWithManualTraversal() }
+				const entries = await readdir(rootPath, { recursive, withFileTypes: true });
+				const symlinkedDirectories: string[] = [];
+
+				for (const entry of entries) {
+					if (signal?.aborted) { break }
+
+					const subPath = normalize(join(typeof entry.parentPath === 'string' ? entry.parentPath : rootPath, entry.name));
+
+					if (shouldIgnore(subPath)) { continue }
+
+					if (entry.isDirectory()) {
+						fileSystemEntries.addDirectory(subPath);
+					} else if (entry.isFile()) {
+						fileSystemEntries.addFile(subPath);
+					} else if (followSymlinks && entry.isSymbolicLink() && await addSymlink(subPath)) {
+						symlinkedDirectories.push(subPath);
+					}
+				}
+
+				// Native recursion does not descend into symlinked directories; traverse those subtrees manually.
+				for (const symlinkedDirectory of symlinkedDirectories) {
+					if (signal?.aborted) { break }
+					if (await shouldTraverseSymlink(symlinkedDirectory)) { await readWithManualTraversal(symlinkedDirectory) }
+				}
+
+				return true;
+			} catch (error: unknown) {
+				const errorCode = isNodeError(error) && typeof error.code === 'string' ? error.code : undefined;
+
+				if (errorCode === undefined || !recursiveReadUnsupportedErrorCodes.has(errorCode)) {
+					throw error;
+				}
+
+				return false;
+			}
+		};
+
+		// Attempt a native recursive read first if no ignore rules are specified. If it fails or ignore rules exist, fall back to manual traversal.
+		if (!(ignore === undefined && await readWithNativeRecursion())) { await readWithManualTraversal(rootPath) }
 
 		return signal?.aborted ? fileSystemEntries.reset() : fileSystemEntries;
 	}
 
 	/**
+	 * Checks whether a path is itself a symbolic link (without following it).
+	 * @param targetPath - The path to check.
+	 * @param sync - Use a blocking `lstatSync` instead of the async call.
+	 * @returns True for a symlink; false for anything else, including a missing path.
+	 */
+	static async isSymbolicLink(targetPath: string, sync: boolean = false): Promise<boolean> {
+		try { return (sync ? lstatSync(targetPath) : await lstat(targetPath)).isSymbolicLink() } catch { return false }
+	}
+
+	/**
 	 * Gets the stats for a file or directory.
 	 * @param targetPath - The path to the file or directory.
-	 * @param signal - Abort signal supplied by the timeout decorator; stops retrying once aborted.
+	 * @param options - Optional cancellation signal and timeout. Without a timeout the stat is bounded only by the signal.
 	 * @returns A promise that resolves to the stats object, undefined for confirmed absence, or rejects for an indeterminate result.
 	 */
-	static async getStats(targetPath: string, signal?: AbortSignal): Promise<Stats | undefined> {
-		const result = signal === undefined
-			? await FileSystem.getStatsWithTimeout(targetPath)
-			: await FileSystem.getStatsWithTimeout(targetPath, signal);
+	static async getStats(targetPath: string, { signal, timeout, sync }: StatOptions = {}): Promise<Stats | undefined> {
+		if (sync === true) {
+			if (signal?.aborted) { throw new DOMException('The operation was aborted', 'AbortError') }
+
+			try {
+				return statSync(targetPath, { bigint: true, throwIfNoEntry: false });
+			} catch (error: unknown) {
+				if (isNodeError(error) && error.code === 'ENOTDIR') { return undefined }
+				if (!isNodeError(error) || !retryErrorCodes.has(error.code)) { throw error }
+			}
+		}
+
+		const timeoutSignal = timeout === undefined ? undefined : AbortSignal.timeout(timeout);
+		if (timeoutSignal !== undefined) {
+			signal = signal === undefined ? timeoutSignal : AbortSignal.any([ signal, timeoutSignal ]);
+		}
+
+		const result = await FileSystem.#getStatsWithRetries(targetPath, signal);
 
 		if (result === missingStat) { return undefined }
 
 		if (result === undefined) {
+			if (timeoutSignal?.aborted) {
+				const error = new Error(`Stat operation timed out after ${timeout}ms for "${targetPath}"`, { cause: timeoutSignal.reason });
+				error.name = 'TimeoutError';
+				throw Object.assign(error, { code: 'WATCHR_STAT_TIMEOUT' });
+			}
+
 			if (signal?.aborted) { throw new DOMException('The operation was aborted', 'AbortError') }
 
-			throw new Error('🚨 Stat operation timed out');
+			throw new Error('Stat operation timed out');
 		}
 
 		return result;
 	}
 
 	/**
-	 * Gets stats with a bounded timeout while preserving confirmed absence separately from timeout.
+	 * Stats a path with bounded retries while preserving confirmed absence separately from cancellation.
 	 * @param targetPath - The path to the file or directory.
-	 * @param signal - Optional caller cancellation signal.
-	 * @returns Stats, the missing sentinel, or undefined when the timeout/cancellation wins.
+	 * @param signal - Optional cancellation signal; stops retrying once aborted.
+	 * @returns Stats, the missing sentinel, or undefined when cancellation wins.
 	 */
-	@timeout()
-	private static async getStatsWithTimeout(targetPath: string, signal?: AbortSignal): Promise<Stats | typeof missingStat | undefined> {
+	static async #getStatsWithRetries(targetPath: string, signal?: AbortSignal): Promise<Stats | typeof missingStat | undefined> {
 		let retries = 0;
 
 		const handleRejection = async (error: unknown): Promise<Stats | typeof missingStat | undefined> => {
 			if (isNodeError(error) && (error.code === 'ENOENT' || error.code === 'ENOTDIR')) { return missingStat }
 			if (!isNodeError(error) || !retryErrorCodes.has(error.code)) { throw error }
 
-			if (retries >= FileSystem.maxStatRetries) { throw error }
+			if (retries >= FileSystem.#maxStatRetries) { throw error }
 
-			// The decorator already returned undefined to the caller; further retries are discarded work.
+			// The caller already gave up once the signal aborted; further retries are discarded work.
 			if (signal?.aborted) { return }
 
 			retries++;
@@ -167,19 +261,19 @@ export class FileSystem {
 
 			if (signal?.aborted) { return }
 
-			return getStatsWithTimeout(targetPath, signal);
+			return attemptStat(targetPath, signal);
 		};
 
 		/**
-		 * Gets the stats for a file or directory with a timeout.
+		 * Performs a single stat attempt through the retry queue.
 		 * @param targetPath - The path to the file or directory.
 		 * @param requestSignal - Signal used for this individual retry attempt.
 		 * @returns A promise that resolves to the stats or undefined if not found.
 		 */
-		const getStatsWithTimeout = async (targetPath: string, requestSignal: AbortSignal | undefined = signal): Promise<Stats | typeof missingStat | undefined> => {
+		const attemptStat = async (targetPath: string, requestSignal: AbortSignal | undefined = signal): Promise<Stats | typeof missingStat | undefined> => {
 			// Each attempt takes its own queue slot so retries stay throttled under descriptor pressure.
 			try {
-				using _queueLease = await FileSystem.retryQueue.schedule<Stats>(requestSignal);
+				using _queueLease = await FileSystem.#retryQueue.schedule(requestSignal);
 
 				if (requestSignal?.aborted) { return }
 
@@ -194,7 +288,7 @@ export class FileSystem {
 		};
 
 		try {
-			return await getStatsWithTimeout(targetPath);
+			return await attemptStat(targetPath);
 		} catch (error: unknown) {
 			if (signal?.aborted) { return }
 

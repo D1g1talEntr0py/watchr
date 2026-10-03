@@ -1,15 +1,19 @@
 /**
  * Represents a collection of file system entries.
+ * @internal
  */
 export class FileSystemEntries {
 	/** The directories in the file system. */
-	private readonly _directories: string[];
+	readonly #directories: string[];
 	/** The files in the file system. */
-	private readonly _files: string[];
+	readonly #files: string[];
+	/** Entries (already present in `directories` or `files`) that were discovered as symbolic links. */
+	readonly #symlinks: Set<string>;
 
 	constructor() {
-		this._directories = [];
-		this._files = [];
+		this.#directories = [];
+		this.#files = [];
+		this.#symlinks = new Set();
 	}
 
 	/**
@@ -18,7 +22,7 @@ export class FileSystemEntries {
 	 * @returns The file system entries.
 	 */
 	addDirectory(directory: string): this {
-		this._directories.push(directory);
+		this.#directories.push(directory);
 
 		return this;
 	}
@@ -29,7 +33,18 @@ export class FileSystemEntries {
 	 * @returns The file system entries.
 	 */
 	addFile(file: string): this {
-		this._files.push(file);
+		this.#files.push(file);
+
+		return this;
+	}
+
+	/**
+	 * Marks an already-added directory or file as a symbolic link.
+	 * @param symlink - The symlink path.
+	 * @returns The file system entries.
+	 */
+	addSymlink(symlink: string): this {
+		this.#symlinks.add(symlink);
 
 		return this;
 	}
@@ -39,7 +54,7 @@ export class FileSystemEntries {
 	 * @returns The directories in the file system.
 	 */
 	get directories(): string[] {
-		return this._directories;
+		return this.#directories;
 	}
 
 	/**
@@ -47,7 +62,15 @@ export class FileSystemEntries {
 	 * @returns The files in the file system.
 	 */
 	get files(): string[] {
-		return this._files;
+		return this.#files;
+	}
+
+	/**
+	 * Gets the entries that were discovered as symbolic links.
+	 * @returns The symlink paths.
+	 */
+	get symlinks(): Set<string> {
+		return this.#symlinks;
 	}
 
 	/**
@@ -55,8 +78,9 @@ export class FileSystemEntries {
 	 * @returns The file system entries.
 	 */
 	reset(): this {
-		this._directories.length = 0;
-		this._files.length = 0;
+		this.#directories.length = 0;
+		this.#files.length = 0;
+		this.#symlinks.clear();
 
 		return this;
 	}

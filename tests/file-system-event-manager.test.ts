@@ -1,311 +1,252 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { promises as fs } from 'node:fs';
-import { resolve } from 'node:path';
-import { setTimeout as delay } from 'node:timers/promises';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { FileSystemEvent, NodeTargetEvent } from '../src/constants';
-import { FileSystemEventManager } from '../src/file-system-event-manager';
-import { FileSystemStateManager } from '../src/file-system-state-manager';
-import { Watchr } from '../src/watchr';
-import type { WatchrConfig, WatchrOptions } from '../src/@types';
+import { linkSync, mkdirSync, renameSync, rmSync, writeFileSync, type FSWatcher } from 'node:fs';
+import { readdir } from 'node:fs/promises';
+import { join } from 'node:path';
+import { FileSystemEvent } from '../src/watchr';
+import { cleanupTempRoots, closeWatchers, collectEvents, createReadyWatcher, createTempRoot, delay, settle } from './helpers/fs-fixtures';
 
-const tmpDir = resolve(__dirname, '.tmp', 'file-system-event-manager');
-const defaultOptions: WatchrOptions = {
-	persistent: false,
-	recursive: false,
-	renameTimeout: 100,
-	ignore: (() => false),
-	ignoreInitial: true,
-};
+const { nativeWatchers, scans } = vi.hoisted(() => ({
+	nativeWatchers: new Map<string, FSWatcher>(),
+	scans: { gate: undefined as Promise<void> | undefined, failure: undefined as Error | undefined }
+}));
 
-class MockWatcher extends EventEmitter {
-	closed: boolean = false;
+vi.mock('node:fs', async (importOriginal) => {
+	const actual = await importOriginal<typeof import('node:fs')>();
 
-	close(): void {
-		this.closed = true;
-	}
-}
+	return {
+		...actual,
+		watch: vi.fn((target: string) => {
+			const watcher = new EventEmitter() as FSWatcher;
+			watcher.close = vi.fn(() => { watcher.emit('close') });
+			watcher.ref = vi.fn(() => watcher);
+			watcher.unref = vi.fn(() => watcher);
+			nativeWatchers.set(target, watcher);
+			return watcher;
+		})
+	};
+});
 
-describe('FileSystemEventManager', () => {
-	let watchr: Watchr;
-	let poller: FileSystemStateManager;
-	let watcher: MockWatcher;
+vi.mock('node:fs/promises', async (importOriginal) => {
+	const actual = await importOriginal<typeof import('node:fs/promises')>();
+	return {
+		...actual,
+		readdir: vi.fn(async (...args: Parameters<typeof actual.readdir>) => {
+			await scans.gate;
+			if (scans.failure !== undefined) { throw scans.failure }
+			return actual.readdir(...args);
+		})
+	};
+});
 
-	beforeAll(async () => {
-		await fs.mkdir(tmpDir, { recursive: true });
-	});
-
-	afterAll(async () => {
-		await fs.rm(tmpDir, { recursive: true, force: true });
-	});
-
-	beforeEach(async () => {
-		await fs.rm(tmpDir, { recursive: true, force: true });
-		await fs.mkdir(tmpDir, { recursive: true });
-		watchr = new Watchr();
-		poller = new FileSystemStateManager();
-		watcher = new MockWatcher();
-		await watchr.readyLock;
-	});
-
+describe('Watchr native notification boundary', () => {
 	afterEach(() => {
-		watchr.close();
+		closeWatchers();
+		cleanupTempRoots();
+		nativeWatchers.clear();
+		scans.gate = undefined;
+		scans.failure = undefined;
+		vi.mocked(readdir).mockClear();
 		vi.restoreAllMocks();
 	});
 
-	it('creates and cleans up without relying on internals', async () => {
-		const manager = await FileSystemEventManager.newInstance(poller, watchr, {
-			watcher: watcher as unknown as WatchrConfig['watcher'],
-			options: defaultOptions,
-			folderPath: tmpDir,
-		});
+	it.each([ '', null ])('discovers new files through an unnamed notification (%s)', async (filename) => {
+		const root = createTempRoot();
+		const watcher = await createReadyWatcher(root, { ignoreInitial: true, renameTimeout: 0 });
+		const { events } = collectEvents(watcher);
+		const file = join(root, 'new.txt');
+		writeFileSync(file, 'new contents');
+		nativeWatchers.get(root)!.emit('change', 'rename', filename);
 
-		expect(manager).toBeInstanceOf(FileSystemEventManager);
-		expect(watcher.closed).toBe(false);
-
-		manager.cleanup();
-		expect(watcher.closed).toBe(true);
+		await vi.waitFor(() => expect(events.filter(({ path }) => path === file)).toHaveLength(1));
+		expect(events.find(({ path }) => path === file)).toMatchObject({ event: FileSystemEvent.ADD, stats: { size: 12 } });
+		await settle();
+		expect(events.filter(({ path }) => path === file)).toHaveLength(1);
 	});
 
-	it('sanitizes watcher errors before emitting', async () => {
-		await FileSystemEventManager.newInstance(poller, watchr, {
-			watcher: watcher as unknown as WatchrConfig['watcher'],
-			options: defaultOptions,
-			folderPath: tmpDir,
+	it.each([ 'EIO', undefined ])('sanitizes native watcher errors with code %s', async (code) => {
+		const root = createTempRoot();
+		const watcher = await createReadyWatcher(root, { ignoreInitial: true });
+		const errors: Error[] = [];
+		watcher.on('error', (error) => errors.push(error));
+		const original = Object.assign(new Error(`Cannot watch ${root}`), { code });
+		nativeWatchers.get(root)!.emit('error', original);
+
+		expect(errors).toHaveLength(1);
+		expect(errors[0]).toMatchObject({
+			message: code === undefined ? 'Watcher error' : `Watcher error (${code})`,
+			code: code ?? 'UNKNOWN',
+			cause: original
 		});
-
-		const errorPromise = new Promise<Error>((resolveError) => {
-			watchr.once('error', resolveError);
-		});
-
-		const rawError = new Error('raw details') as NodeJS.ErrnoException;
-		rawError.code = 'ENOENT';
-		watcher.emit('error', rawError);
-
-		const emittedError = await errorPromise;
-		expect(emittedError.message).toBe('🚨 Watcher error (ENOENT)');
-		expect(emittedError.message).not.toContain('raw details');
-		expect((emittedError as NodeJS.ErrnoException).code).toBe('ENOENT');
+		expect(errors[0]?.message).not.toContain(root);
+		expect(watcher.isClosed()).toBe(false);
 	});
 
-	it('routes watcher filename callbacks through the configured node handler', async () => {
-		const nodeHandler = vi.fn(async () => undefined);
-		await FileSystemEventManager.newInstance(poller, watchr, {
-			watcher: watcher as unknown as WatchrConfig['watcher'],
-			options: defaultOptions,
-			folderPath: tmpDir,
-			nodeHandler,
-		});
+	it('preserves file-to-directory replacement events in a multi-path batch', async () => {
+		const root = createTempRoot();
+		const target = join(root, 'entry');
+		const other = join(root, 'other.txt');
+		writeFileSync(target, 'file');
+		const watcher = await createReadyWatcher(root, { ignoreInitial: true, renameTimeout: 0 });
+		const { events } = collectEvents(watcher);
+		rmSync(target);
+		mkdirSync(target);
+		writeFileSync(other, 'other');
+		const native = nativeWatchers.get(root)!;
+		native.emit('change', 'rename', 'entry');
+		native.emit('change', 'rename', 'other.txt');
 
-		watcher.emit('change', NodeTargetEvent.CHANGE, 'example.txt');
-		await Promise.resolve();
-
-		expect(nodeHandler).toHaveBeenCalled();
-		expect(nodeHandler).toHaveBeenLastCalledWith(NodeTargetEvent.CHANGE, resolve(tmpDir, 'example.txt'), false);
+		await vi.waitFor(() => expect(events.filter(({ path }) => path === target)).toHaveLength(2));
+		expect(events.filter(({ path }) => path === target).map(({ event }) => event)).toEqual([
+			FileSystemEvent.UNLINK,
+			FileSystemEvent.ADD_DIR
+		]);
+		expect(events.find(({ path }) => path === other)?.event).toBe(FileSystemEvent.ADD);
 	});
 
-	it('stops handling watcher callbacks after cleanup', async () => {
-		const nodeHandler = vi.fn(async () => undefined);
-		const manager = await FileSystemEventManager.newInstance(poller, watchr, {
-			watcher: watcher as unknown as WatchrConfig['watcher'],
-			options: defaultOptions,
-			folderPath: tmpDir,
-			nodeHandler,
-		});
+	it('coalesces notification storms during a scan and discovers files in the queued scan', async () => {
+		const root = createTempRoot();
+		const watcher = await createReadyWatcher(root, { ignoreInitial: true, renameTimeout: 0, fallbackScanInterval: 25 });
+		const { events } = collectEvents(watcher);
+		vi.mocked(readdir).mockClear();
+		const scan = Promise.withResolvers<void>();
+		scans.gate = scan.promise;
+		const native = nativeWatchers.get(root)!;
+		native.emit('change', 'change', '');
+		await vi.waitFor(() => expect(readdir).toHaveBeenCalledTimes(1));
 
-		manager.cleanup();
-		nodeHandler.mockClear();
-		watcher.emit('change', NodeTargetEvent.CHANGE, 'ignored.txt');
-		await Promise.resolve();
-
-		expect(nodeHandler).not.toHaveBeenCalled();
+		for (let index = 0; index < 10; index++) { native.emit('change', 'rename', null) }
+		expect(readdir).toHaveBeenCalledTimes(1);
+		const file = join(root, 'queued.txt');
+		writeFileSync(file, 'queued');
+		scan.resolve();
+		await vi.waitFor(() => expect(readdir).toHaveBeenCalledTimes(2));
+		await vi.waitFor(() => expect(events.filter(({ path }) => path === file)).toHaveLength(1));
+		expect(events.find(({ path }) => path === file)?.event).toBe(FileSystemEvent.ADD);
 	});
 
-	it('delivers initial events after delayed polling', async () => {
-		const initialEvents = [ FileSystemEvent.ADD_DIR ];
-		let releasePolling!: () => void;
-		const pollingReleased = new Promise<void>((resolvePolling) => { releasePolling = resolvePolling });
-		vi.spyOn(watchr, 'isReady').mockReturnValue(false);
-		const lockSpy = vi.spyOn(watchr.renameWatchr, 'getLockTargetEvent').mockImplementation(() => undefined);
-		vi.spyOn(poller, 'update').mockImplementation(async () => {
-			await pollingReleased;
-			return initialEvents;
-		});
-
-		const managerPromise = FileSystemEventManager.newInstance(poller, watchr, {
-			watcher: watcher as unknown as WatchrConfig['watcher'],
-			options: { ...defaultOptions, ignoreInitial: false, renameTimeout: 0 },
-			folderPath: tmpDir,
-		});
-
-		await vi.waitFor(() => expect(poller.update).toHaveBeenCalled());
-		releasePolling();
-		const manager = await managerPromise;
-
-		await vi.waitFor(() => expect(lockSpy).toHaveBeenCalledWith(FileSystemEvent.ADD_DIR, tmpDir, 0, expect.any(Set)));
-		manager.cleanup();
+	it('does not emit stale events after closing during a snapshot scan', async () => {
+		const root = createTempRoot();
+		const watcher = await createReadyWatcher(root, { ignoreInitial: true, renameTimeout: 0 });
+		const { events } = collectEvents(watcher);
+		vi.mocked(readdir).mockClear();
+		const scan = Promise.withResolvers<void>();
+		scans.gate = scan.promise;
+		const native = nativeWatchers.get(root)!;
+		native.emit('change', 'rename', '');
+		await vi.waitFor(() => expect(readdir).toHaveBeenCalledOnce());
+		writeFileSync(join(root, 'late.txt'), 'late');
+		watcher.close();
+		scan.resolve();
+		await vi.waitFor(() => expect(vi.mocked(readdir).mock.settledResults[0]?.type).toBe('fulfilled'));
+		await settle(10);
+		expect(events).toEqual([]);
+		expect(native.close).toHaveBeenCalled();
+		expect(native.listenerCount('change')).toBe(0);
+		expect(native.listenerCount('error')).toBe(0);
 	});
 
-	describe('batch deduplication', () => {
-		/**
-		 * Creates an event manager whose poller yields the given events per path,
-		 * with the watchr emit/lock sinks mocked so batch output can be captured
-		 * @param eventsByPath The file system events the poller should report per absolute path
-		 * @returns The capture spies for direct emissions and rename-lock routing
-		 */
-		async function setupBatchCapture(eventsByPath: Map<string, FileSystemEvent[]>) {
-			const emitEventSpy = vi.spyOn(watchr, 'emitEvent').mockImplementation(() => undefined);
-			const lockSpy = vi.spyOn(watchr.renameWatchr, 'getLockTargetEvent').mockImplementation(() => undefined);
-			vi.spyOn(poller, 'update').mockImplementation(async (targetPath) => eventsByPath.get(targetPath) ?? []);
+	it('recovers on the next notification after a snapshot read fails', async () => {
+		const root = createTempRoot();
+		const watcher = await createReadyWatcher(root, { ignoreInitial: true, renameTimeout: 0, fallbackScanInterval: 0 });
+		const { events } = collectEvents(watcher);
+		vi.mocked(readdir).mockClear();
+		scans.failure = Object.assign(new Error('snapshot unavailable'), { code: 'EIO' });
+		const native = nativeWatchers.get(root)!;
+		native.emit('change', 'change', '');
+		await vi.waitFor(() => expect(vi.mocked(readdir).mock.settledResults[0]?.type).toBe('rejected'));
+		await settle();
+		scans.failure = undefined;
+		const file = join(root, 'recovered.txt');
+		writeFileSync(file, 'recovered');
+		native.emit('change', 'rename', '');
+		await vi.waitFor(() => expect(events.find(({ path }) => path === file)?.event).toBe(FileSystemEvent.ADD));
+		expect(watcher.isClosed()).toBe(false);
+	});
 
-			await FileSystemEventManager.newInstance(poller, watchr, {
-				watcher: watcher as unknown as WatchrConfig['watcher'],
-				options: defaultOptions,
-				folderPath: tmpDir,
-			});
+	it.each([ false, true ])('correlates a delayed source notification with its destination (directory=%s)', async (directory) => {
+		const root = createTempRoot();
+		const source = join(root, 'source');
+		const target = join(root, 'target');
+		if (directory) { mkdirSync(source) } else { writeFileSync(source, 'original') }
+		const watcher = await createReadyWatcher(root, { ignoreInitial: true, renameTimeout: 1000 });
+		const { events } = collectEvents(watcher);
+		const native = nativeWatchers.get(root)!;
+		renameSync(source, target);
+		writeFileSync(join(root, 'marker.txt'), 'marker');
+		native.emit('change', 'rename', 'source');
+		native.emit('change', 'rename', 'marker.txt');
+		await vi.waitFor(() => expect(events.some(({ path }) => path === join(root, 'marker.txt'))).toBe(true));
+		expect(events.filter(({ path }) => path === source)).toEqual([]);
+		native.emit('change', 'rename', 'target');
+		await vi.waitFor(() => expect(events.find(({ path }) => path === source)).toMatchObject({
+			event: directory ? FileSystemEvent.RENAME_DIR : FileSystemEvent.RENAME,
+			pathNext: target
+		}));
+		expect(events.filter(({ path }) => path === target)).toEqual([]);
+	});
 
-			return { emitEventSpy, lockSpy };
+	it('reports a same-path inode restoration as change instead of unlink and add', async () => {
+		const root = createTempRoot();
+		const outside = createTempRoot();
+		const file = join(root, 'restored.txt');
+		const saved = join(outside, 'saved.txt');
+		writeFileSync(file, 'original');
+		linkSync(file, saved);
+		const watcher = await createReadyWatcher(root, { ignoreInitial: true, renameTimeout: 1000 });
+		const { events } = collectEvents(watcher);
+		rmSync(file);
+		writeFileSync(join(root, 'marker.txt'), 'marker');
+		const native = nativeWatchers.get(root)!;
+		native.emit('change', 'rename', 'restored.txt');
+		native.emit('change', 'rename', 'marker.txt');
+		await vi.waitFor(() => expect(events.some(({ path }) => path === join(root, 'marker.txt'))).toBe(true));
+		linkSync(saved, file);
+		writeFileSync(file, 'restored contents');
+		native.emit('change', 'rename', 'restored.txt');
+		await vi.waitFor(() => expect(events.filter(({ path }) => path === file)).toHaveLength(1));
+		expect(events.find(({ path }) => path === file)).toMatchObject({ event: FileSystemEvent.CHANGE, stats: { size: 17 } });
+	});
+
+	it.each([ 'settle', 'delete', 'close' ])('handles a pending add after an inode moves out of a replaced path: %s', async (action) => {
+		const root = createTempRoot();
+		const source = join(root, 'source.txt');
+		const target = join(root, 'target.txt');
+		writeFileSync(source, 'original');
+		const watcher = await createReadyWatcher(root, { ignoreInitial: true, renameTimeout: 1000 });
+		const { events } = collectEvents(watcher);
+		const native = nativeWatchers.get(root)!;
+		renameSync(source, target);
+		writeFileSync(source, 'replacement');
+		native.emit('change', 'rename', 'source.txt');
+		native.emit('change', 'rename', 'target.txt');
+		await vi.waitFor(() => expect(events.find(({ path }) => path === source)?.event).toBe(FileSystemEvent.CHANGE));
+		expect(events.filter(({ path }) => path === target)).toEqual([]);
+
+		writeFileSync(target, 'latest contents');
+		writeFileSync(join(root, 'marker.txt'), 'marker');
+		native.emit('change', 'change', 'target.txt');
+		native.emit('change', 'rename', 'marker.txt');
+		await vi.waitFor(() => expect(events.some(({ path }) => path === join(root, 'marker.txt'))).toBe(true));
+		expect(events.filter(({ path }) => path === target)).toEqual([]);
+
+		if (action === 'delete') {
+			rmSync(target);
+			writeFileSync(join(root, 'deleted-marker.txt'), 'marker');
+			native.emit('change', 'rename', 'target.txt');
+			native.emit('change', 'rename', 'deleted-marker.txt');
+			await vi.waitFor(() => expect(events.some(({ path }) => path === join(root, 'deleted-marker.txt'))).toBe(true));
+		} else if (action === 'close') {
+			watcher.close();
 		}
 
-		/**
-		 * Emits watcher change callbacks for the given file names within a single turn,
-		 * so the paths land in the same event batch
-		 * @param fileNames The file names relative to the watched folder
-		 */
-		function emitBatch(...fileNames: string[]): void {
-			for (const fileName of fileNames) {
-				watcher.emit('change', NodeTargetEvent.CHANGE, fileName);
-			}
+		await delay(1100);
+		const targetEvents = events.filter(({ path }) => path === target);
+		if (action === 'settle') {
+			expect(targetEvents).toHaveLength(1);
+			expect(targetEvents[0]).toMatchObject({ event: FileSystemEvent.ADD, stats: { size: 15 } });
+		} else {
+			expect(targetEvents).toEqual([]);
 		}
-
-		it('collapses duplicate same-priority events for one path into a single emission', async () => {
-			const pathA = resolve(tmpDir, 'a.txt');
-			const pathB = resolve(tmpDir, 'b.txt');
-			const { emitEventSpy } = await setupBatchCapture(new Map([
-				[ pathA, [ FileSystemEvent.CHANGE, FileSystemEvent.CHANGE ] ],
-				[ pathB, [ FileSystemEvent.CHANGE ] ],
-			]));
-
-			emitBatch('a.txt', 'b.txt');
-
-			await vi.waitFor(() => expect(emitEventSpy).toHaveBeenCalledTimes(2));
-			// Give any stray duplicate emission a bounded chance to surface
-			await delay(25);
-
-			expect(emitEventSpy).toHaveBeenCalledTimes(2);
-			expect(emitEventSpy).toHaveBeenCalledWith(FileSystemEvent.CHANGE, pathA);
-			expect(emitEventSpy).toHaveBeenCalledWith(FileSystemEvent.CHANGE, pathB);
-		});
-
-		it('keeps only the higher-priority event when a path has competing events in one batch', async () => {
-			const pathA = resolve(tmpDir, 'a.txt');
-			const pathB = resolve(tmpDir, 'b.txt');
-			// CHANGE (priority 3) then ADD (priority 4): ADD must win
-			const { emitEventSpy, lockSpy } = await setupBatchCapture(new Map([
-				[ pathA, [ FileSystemEvent.CHANGE, FileSystemEvent.ADD ] ],
-				[ pathB, [ FileSystemEvent.CHANGE ] ],
-			]));
-
-			emitBatch('a.txt', 'b.txt');
-
-			await vi.waitFor(() => expect(lockSpy).toHaveBeenCalledTimes(1));
-			await delay(25);
-
-			expect(lockSpy).toHaveBeenCalledWith(FileSystemEvent.ADD, pathA, defaultOptions.renameTimeout, expect.any(Set));
-			expect(emitEventSpy).toHaveBeenCalledTimes(1);
-			expect(emitEventSpy).toHaveBeenCalledWith(FileSystemEvent.CHANGE, pathB);
-			expect(emitEventSpy).not.toHaveBeenCalledWith(FileSystemEvent.CHANGE, pathA);
-		});
-
-		it('emits events for all distinct paths in one batch', async () => {
-			const paths = [ 'a.txt', 'b.txt', 'c.txt' ].map((fileName) => resolve(tmpDir, fileName));
-			const { emitEventSpy } = await setupBatchCapture(new Map(
-				paths.map((path) => [ path, [ FileSystemEvent.CHANGE ] ]),
-			));
-
-			emitBatch('a.txt', 'b.txt', 'c.txt');
-
-			await vi.waitFor(() => expect(emitEventSpy).toHaveBeenCalledTimes(3));
-			await delay(25);
-
-			expect(emitEventSpy).toHaveBeenCalledTimes(3);
-
-			for (const path of paths) {
-				expect(emitEventSpy).toHaveBeenCalledWith(FileSystemEvent.CHANGE, path);
-			}
-		});
-
-		it('passes a single-event batch through unchanged', async () => {
-			const pathA = resolve(tmpDir, 'a.txt');
-			const { emitEventSpy } = await setupBatchCapture(new Map([
-				[ pathA, [ FileSystemEvent.CHANGE ] ],
-			]));
-
-			emitBatch('a.txt');
-
-			await vi.waitFor(() => expect(emitEventSpy).toHaveBeenCalledTimes(1));
-			await delay(25);
-
-			expect(emitEventSpy).toHaveBeenCalledTimes(1);
-			expect(emitEventSpy).toHaveBeenCalledWith(FileSystemEvent.CHANGE, pathA);
-		});
-
-		it.each([
-			[ FileSystemEvent.UNLINK, FileSystemEvent.ADD_DIR ],
-			[ FileSystemEvent.UNLINK_DIR, FileSystemEvent.ADD ],
-		])('preserves replacement transitions for one path', async (removeEvent, addEvent) => {
-			const pathA = resolve(tmpDir, 'replacement');
-			const { lockSpy } = await setupBatchCapture(new Map([
-				[ pathA, [ removeEvent, addEvent ] ],
-			]));
-
-			emitBatch('replacement');
-
-			await vi.waitFor(() => expect(lockSpy).toHaveBeenCalledTimes(2));
-			await delay(25);
-
-			expect(lockSpy.mock.calls.map(([event, targetPath]) => [ event, targetPath ])).toEqual([
-				[ removeEvent, pathA ],
-				[ addEvent, pathA ],
-			]);
-		});
-
-		it.each([
-			[ FileSystemEvent.UNLINK, FileSystemEvent.ADD_DIR ],
-			[ FileSystemEvent.UNLINK_DIR, FileSystemEvent.ADD ],
-		])('preserves replacement transitions for one path and a co-batched path', async (removeEvent, addEvent) => {
-			const pathA = resolve(tmpDir, 'replacement');
-			const pathB = resolve(tmpDir, 'other.txt');
-			const { lockSpy } = await setupBatchCapture(new Map([
-				[ pathA, [ removeEvent, addEvent ] ],
-				[ pathB, [ FileSystemEvent.CHANGE ] ],
-			]));
-
-			emitBatch('replacement', 'other.txt');
-
-			await vi.waitFor(() => expect(lockSpy).toHaveBeenCalledTimes(2));
-			await delay(25);
-
-			expect(lockSpy.mock.calls.map(([event, targetPath]) => [ event, targetPath ])).toEqual([
-				[ removeEvent, pathA ],
-				[ addEvent, pathA ],
-			]);
-		});
-	});
-
-	it('routes null, undefined, and empty filenames through the fallback', async () => {
-		const manager = await FileSystemEventManager.newInstance(poller, watchr, {
-			watcher: watcher as unknown as WatchrConfig['watcher'],
-			options: defaultOptions,
-			folderPath: tmpDir,
-		});
-		const fallbackSpy = vi.spyOn(manager as unknown as { onEmptyDirectoryWatcherChange: (event: NodeTargetEvent) => void }, 'onEmptyDirectoryWatcherChange');
-
-		watcher.emit('change', NodeTargetEvent.CHANGE, null);
-		watcher.emit('change', NodeTargetEvent.CHANGE);
-		watcher.emit('change', NodeTargetEvent.CHANGE, '');
-
-		expect(fallbackSpy).toHaveBeenCalledTimes(3);
-		manager.cleanup();
 	});
 });

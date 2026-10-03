@@ -1,13 +1,16 @@
 import type { Callable, InodeNumber, Path, Producer } from './@types/index';
 
-/** A class that manages file system locks for file and directory operations. */
+/**
+ * A class that manages file system locks for file and directory operations.
+ * @internal
+ */
 export class FileSystemLocker {
-	private readonly add: Map<InodeNumber, Callable>;
-	private readonly unlink: Map<InodeNumber, Producer<Path>>;
+	readonly #add: Map<InodeNumber, Callable>;
+	readonly #unlink: Map<InodeNumber, Producer<Path>>;
 
 	constructor() {
-		this.add = new Map();
-		this.unlink = new Map();
+		this.#add = new Map();
+		this.#unlink = new Map();
 	}
 
 	/**
@@ -16,7 +19,7 @@ export class FileSystemLocker {
 	 * @param callback - The callback to execute when the lock is released.
 	 */
 	addLock(inodeNumber: InodeNumber, callback: Callable): void {
-		this.add.set(inodeNumber, callback);
+		this.#add.set(inodeNumber, callback);
 	}
 
 	/**
@@ -25,7 +28,7 @@ export class FileSystemLocker {
 	 * @param producer - The producer to execute when the lock is released.
 	 */
 	addUnlink(inodeNumber: InodeNumber, producer: Producer<Path>): void {
-		this.unlink.set(inodeNumber, producer);
+		this.#unlink.set(inodeNumber, producer);
 	}
 
 	/**
@@ -33,7 +36,7 @@ export class FileSystemLocker {
 	 * @param inodeNumber - The inode number to remove the lock from.
 	 */
 	removeLock(inodeNumber: InodeNumber): void {
-		this.add.delete(inodeNumber);
+		this.#add.delete(inodeNumber);
 	}
 
 	/**
@@ -41,7 +44,7 @@ export class FileSystemLocker {
 	 * @param inodeNumber - The inode number to remove the lock from.
 	 */
 	removeUnlink(inodeNumber: InodeNumber): void {
-		this.unlink.delete(inodeNumber);
+		this.#unlink.delete(inodeNumber);
 	}
 
 	/**
@@ -50,7 +53,7 @@ export class FileSystemLocker {
 	 * @returns The callback for the lock or undefined if not found.
 	 */
 	getLock(inodeNumber: InodeNumber): Callable | undefined {
-		return this.add.get(inodeNumber);
+		return this.#add.get(inodeNumber);
 	}
 
 	/**
@@ -59,12 +62,12 @@ export class FileSystemLocker {
 	 * @returns The producer for the lock or undefined if not found.
 	 */
 	getUnlink(inodeNumber: InodeNumber): Producer<Path> | undefined {
-		return this.unlink.get(inodeNumber);
+		return this.#unlink.get(inodeNumber);
 	}
 
 	/** Resets the file system locker. */
 	reset(): void {
-		this.add.clear();
-		this.unlink.clear();
+		this.#add.clear();
+		this.#unlink.clear();
 	}
 }

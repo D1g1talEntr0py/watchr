@@ -1,8 +1,17 @@
 /** Default rename timeout in milliseconds */
 const renameTimeout = 150;
 
-/** Default file descriptor limit */
-const fileDescriptorLimit = 2048;
+/** Default per-stat timeout in milliseconds for live polls */
+const statTimeout = 1000;
+
+/** Default minimum interval in milliseconds between fallback snapshot scans of a watched root */
+const fallbackScanInterval = 50;
+
+/**
+ * Maximum concurrent stat calls admitted process-wide. Stat throughput is bound by the libuv threadpool, not descriptors,
+ * so the limit only needs to cap pathological bursts: the initial scan and live dispatch are bounded well below it.
+ */
+const maxConcurrentStats: number = Math.max(256, 16 * Number(process.env.UV_THREADPOOL_SIZE ?? 4));
 
 /** Inode types */
 const InodeType = {
@@ -66,6 +75,8 @@ export {
 	FileSystemEvent,
 	DirectoryEvent,
 	FileEvent,
-	fileDescriptorLimit,
-	renameTimeout
+	maxConcurrentStats,
+	renameTimeout,
+	statTimeout,
+	fallbackScanInterval
 };

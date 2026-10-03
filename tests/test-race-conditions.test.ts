@@ -97,7 +97,7 @@ describe('Race Condition Fixes', () => {
 		}
 	});
 
-	it('should handle watcher lifecycle without memory leaks', async () => {
+	it('should close every watcher in a rapid open/close loop', async () => {
 		const watchers: Watchr[] = [];
 
 		try {

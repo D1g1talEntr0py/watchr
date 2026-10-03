@@ -1,365 +1,146 @@
+import { afterEach, describe, expect, it } from 'vitest';
+import { mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { FileRenameHandler } from '../src/file-rename-handler';
-import { FileSystemEvent, InodeType } from '../src/constants';
-import { FileSystemLocker } from '../src/file-system-locker';
-import { FileSystemStateManager } from '../src/file-system-state-manager';
 import { LockResolver } from '../src/lock-resolver';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Path, TargetEventEmitter } from '../src/@types';
+import { FileSystemEvent } from '../src/constants';
+import type { Path } from '../src/@types/index';
+import { cleanupTempRoots, createTempRoot, delay } from './helpers/fs-fixtures';
+
+type Emitted = [ event: FileSystemEvent, path: Path, next?: Path ];
 
 describe('FileRenameHandler', () => {
-  let fileRenameHandler: FileRenameHandler;
-  let emitEvent: TargetEventEmitter;
-  let emitError: ReturnType<typeof vi.fn>;
-  let fileSystemPoller: FileSystemStateManager;
-
-  beforeEach(() => {
-    emitEvent = vi.fn();
-    emitError = vi.fn();
-    fileRenameHandler = new FileRenameHandler(emitEvent, emitError);
-    fileSystemPoller = fileRenameHandler.fileStateManager;
-  });
-
-  describe('Initialization', () => {
-    it('should initialize correctly', () => {
-      expect(fileRenameHandler).toBeInstanceOf(FileRenameHandler);
-      expect(fileRenameHandler['fileLocks']).toBeInstanceOf(FileSystemLocker);
-      expect(fileRenameHandler['directoryLocks']).toBeInstanceOf(FileSystemLocker);
-      expect(fileRenameHandler.fileStateManager).toBeInstanceOf(FileSystemStateManager);
-    });
-  });
-
-  describe('getLockTargetEvent', () => {
-    it('should emit ADD event for new file when no inode tracking involved', () => {
-      const targetPath: Path = '/path/to/file';
-
-      // Mock getInodeNumber to return undefined (no inode tracking)
-      vi.spyOn(fileSystemPoller, 'getInodeNumber').mockReturnValue(undefined);
-
-      fileRenameHandler.getLockTargetEvent(FileSystemEvent.ADD, targetPath);
-
-      expect(emitEvent).toHaveBeenCalledWith(FileSystemEvent.ADD, targetPath);
-    });
-
-    it('should emit ADD_DIR event for new directory when no inode tracking involved', () => {
-      const targetPath: Path = '/path/to/dir';
-
-      // Mock getInodeNumber to return undefined (no inode tracking)
-      vi.spyOn(fileSystemPoller, 'getInodeNumber').mockReturnValue(undefined);
-
-      fileRenameHandler.getLockTargetEvent(FileSystemEvent.ADD_DIR, targetPath);
-
-      expect(emitEvent).toHaveBeenCalledWith(FileSystemEvent.ADD_DIR, targetPath);
-    });
-
-    it('should emit UNLINK event for deleted file when no inode tracking involved', () => {
-      const targetPath: Path = '/path/to/file';
-
-      // Mock getInodeNumber to return undefined (no inode tracking)
-      vi.spyOn(fileSystemPoller, 'getInodeNumber').mockReturnValue(undefined);
-
-      fileRenameHandler.getLockTargetEvent(FileSystemEvent.UNLINK, targetPath);
-
-      expect(emitEvent).toHaveBeenCalledWith(FileSystemEvent.UNLINK, targetPath);
-    });
-
-    it('should emit UNLINK_DIR event for deleted directory when no inode tracking involved', () => {
-      const targetPath: Path = '/path/to/dir';
-
-      // Mock getInodeNumber to return undefined (no inode tracking)
-      vi.spyOn(fileSystemPoller, 'getInodeNumber').mockReturnValue(undefined);
-
-      fileRenameHandler.getLockTargetEvent(FileSystemEvent.UNLINK_DIR, targetPath);
-
-      expect(emitEvent).toHaveBeenCalledWith(FileSystemEvent.UNLINK_DIR, targetPath);
-    });
-  });
-
-  describe('Rename event', () => {
-    it('should not emit delayed UNLINK fallback when add lock resolves first', () => {
-      vi.useFakeTimers();
-
-      const originalPath: Path = '/path/to/file';
-      const renamedPath: Path = '/path/to/renamed-file';
-      const inodeNumber = 777;
-
-      vi.spyOn(fileSystemPoller, 'getInodeNumber').mockReturnValue(inodeNumber);
-
-      // Out-of-order delivery: ADD observed first, then UNLINK for the same inode.
-      fileRenameHandler.getLockTargetEvent(FileSystemEvent.ADD, renamedPath, 50);
-      fileRenameHandler.getLockTargetEvent(FileSystemEvent.UNLINK, originalPath, 50);
-
-      vi.advanceTimersByTime(200);
-
-      expect(emitEvent).toHaveBeenCalledWith(FileSystemEvent.RENAME, originalPath, renamedPath);
-      expect(emitEvent).not.toHaveBeenCalledWith(FileSystemEvent.UNLINK, originalPath);
-
-      vi.useRealTimers();
-    });
-
-    it('should emit RENAME immediately for ADD when a sibling inode path already exists', () => {
-      const originalPath: Path = '/path/to/file';
-      const renamedPath: Path = '/path/to/file-renamed';
-      const inodeNumber = 456;
-
-      const getInodeSpy = vi.spyOn(fileSystemPoller, 'getInodeNumber').mockReturnValue(inodeNumber);
-      const siblingSpy = vi.spyOn(fileSystemPoller.paths, 'find').mockReturnValue(originalPath);
-      const resolverSpy = vi.spyOn(fileRenameHandler['lockResolver'], 'add');
-
-      fileRenameHandler.getLockTargetEvent(FileSystemEvent.ADD, renamedPath, 250);
-
-      expect(getInodeSpy).toHaveBeenCalledWith(renamedPath, FileSystemEvent.ADD, InodeType.FILE);
-      expect(siblingSpy).toHaveBeenCalledWith(inodeNumber, expect.any(Function));
-      expect(emitEvent).toHaveBeenCalledWith(FileSystemEvent.RENAME, originalPath, renamedPath);
-      expect(resolverSpy).not.toHaveBeenCalled();
-    });
-
-    it('should emit RENAME immediately for UNLINK when destination inode path already exists', () => {
-      const originalPath: Path = '/path/to/file';
-      const renamedPath: Path = '/path/to/file-renamed';
-      const inodeNumber = 654;
-
-      const getInodeSpy = vi.spyOn(fileSystemPoller, 'getInodeNumber').mockReturnValue(inodeNumber);
-      const siblingSpy = vi.spyOn(fileSystemPoller.paths, 'find').mockReturnValue(renamedPath);
-      const resolverSpy = vi.spyOn(fileRenameHandler['lockResolver'], 'add');
-
-      fileRenameHandler.getLockTargetEvent(FileSystemEvent.UNLINK, originalPath, 250);
-
-      expect(getInodeSpy).toHaveBeenCalledWith(originalPath, FileSystemEvent.UNLINK, InodeType.FILE);
-      expect(siblingSpy).toHaveBeenCalledWith(inodeNumber, expect.any(Function));
-      expect(emitEvent).toHaveBeenCalledWith(FileSystemEvent.RENAME, originalPath, renamedPath);
-      expect(resolverSpy).not.toHaveBeenCalled();
-    });
-
-    it('should not emit RENAME for UNLINK when the sibling path already received a direct CHANGE this batch', () => {
-      const tempPath: Path = '/path/to/.file.tmp';
-      const targetPath: Path = '/path/to/file';
-      const inodeNumber = 789;
-
-      vi.spyOn(fileSystemPoller, 'getInodeNumber').mockReturnValue(inodeNumber);
-      vi.spyOn(fileSystemPoller.paths, 'find').mockReturnValue(targetPath);
-
-      fileRenameHandler.getLockTargetEvent(FileSystemEvent.UNLINK, tempPath, 0, new Set([ targetPath ]));
-
-      expect(emitEvent).not.toHaveBeenCalledWith(FileSystemEvent.RENAME, tempPath, targetPath);
-      expect(emitEvent).toHaveBeenCalledWith(FileSystemEvent.UNLINK, tempPath);
-    });
-
-  it('should not emit RENAME for UNLINK when changedPaths contains a non-canonical sibling path', () => {
-    const tempPath: Path = '/path/to/.file.tmp';
-    const targetPath: Path = '/path/to/file';
-    const nonCanonicalTargetPath: Path = '/path/to/sub/../file';
-    const inodeNumber = 789;
-
-    vi.spyOn(fileSystemPoller, 'getInodeNumber').mockReturnValue(inodeNumber);
-    vi.spyOn(fileSystemPoller.paths, 'find').mockReturnValue(targetPath);
-
-    fileRenameHandler.getLockTargetEvent(FileSystemEvent.UNLINK, tempPath, 0, new Set([ nonCanonicalTargetPath ]));
-
-    expect(emitEvent).not.toHaveBeenCalledWith(FileSystemEvent.RENAME, tempPath, targetPath);
-    expect(emitEvent).toHaveBeenCalledWith(FileSystemEvent.UNLINK, tempPath);
-  });
-
-    it('should not emit RENAME for ADD when the sibling inode path already received a direct CHANGE this batch', () => {
-      const originalPath: Path = '/path/to/file';
-      const tempPath: Path = '/path/to/.file.tmp';
-      const inodeNumber = 987;
-
-      vi.spyOn(fileSystemPoller, 'getInodeNumber').mockReturnValue(inodeNumber);
-      vi.spyOn(fileSystemPoller.paths, 'find').mockReturnValue(originalPath);
-
-      fileRenameHandler.getLockTargetEvent(FileSystemEvent.ADD, tempPath, 0, new Set([ originalPath ]));
-
-      expect(emitEvent).not.toHaveBeenCalledWith(FileSystemEvent.RENAME, originalPath, tempPath);
-      expect(emitEvent).toHaveBeenCalledWith(FileSystemEvent.ADD, tempPath);
-    });
-
-    it('should emit a RENAME event when a file is moved', () => {
-			vi.useFakeTimers();
-			const originalPath: Path = '/path/to/file';
-			const renamedPath: Path = '/path/to/renamed-file';
-			const inodeNumber = 456;
-
-			// Mock getInodeNumber to control the inode
-  		vi.spyOn(fileSystemPoller, 'getInodeNumber').mockReturnValue(inodeNumber);
-
-			// 1. Simulate UNLINK on the original path.
-			fileRenameHandler.getLockTargetEvent(FileSystemEvent.UNLINK, originalPath, 1);
-
-			vi.advanceTimersByTime(100);
-
-			expect(emitEvent).toHaveBeenCalledWith(FileSystemEvent.UNLINK, originalPath);
-
-			// 2. Mock the poller's find method. This is key.
-			// We make it return the original path to simulate finding a case-variant match.
-			vi.spyOn(fileSystemPoller.paths, 'find').mockReturnValue(originalPath);
-
-			// 3. Simulate ADD on the new path, which should trigger the RENAME event.
-			fileRenameHandler.getLockTargetEvent(FileSystemEvent.ADD, renamedPath, 2);
-
-			vi.advanceTimersByTime(100);
-
-			// Verify that the RENAME event was emitted correctly.
-			expect(emitEvent).toHaveBeenCalledWith(FileSystemEvent.RENAME, originalPath, renamedPath);
-
-			expect(emitEvent).toHaveBeenCalledTimes(2);
-
-			vi.useRealTimers();
-    });
-
-		it('should emit RENAME event when file system is case-insensitive', () => {
-			const originalPath: Path = '/path/to/file';
-			const renamedPath: Path = '/path/to/File';
-			const inodeNumber = 456;
-
-			// Mock getInodeNumber to control the inode
-			vi.spyOn(fileSystemPoller, 'getInodeNumber').mockReturnValue(inodeNumber);
-
-			// 1. Simulate UNLINK on the original path.
-			fileRenameHandler.getLockTargetEvent(FileSystemEvent.UNLINK, originalPath);
-
-			// 2. Mock the poller's find method. This is key.
-			// We make it return the original path to simulate finding a case-variant match.
-			vi.spyOn(fileSystemPoller.paths, 'find').mockReturnValue(originalPath);
-
-			// 3. Simulate ADD on the new path, which should trigger the RENAME event.
-			fileRenameHandler.getLockTargetEvent(FileSystemEvent.ADD, renamedPath);
-
-			// Verify that the RENAME event was emitted correctly.
-			expect(emitEvent).toHaveBeenCalledWith(FileSystemEvent.RENAME, originalPath, renamedPath);
-			expect(emitEvent).toHaveBeenCalledTimes(1);
-		});
-  });
-
-  describe('Change event', () => {
-    it('should emit a CHANGE event when a file is modified', () => {
-      const targetPath: Path = '/path/to/file';
-      const inodeNumber = 111;
-
-      // Mock getInodeNumber to return a consistent inode for both UNLINK and ADD
-      const getInodeSpy = vi.spyOn(fileSystemPoller, 'getInodeNumber');
-      getInodeSpy.mockReturnValue(inodeNumber);
-
-      // Mock the poller's stats.has method to simulate the file existing after the change
-      const statsHasSpy = vi.spyOn(fileSystemPoller.stats, 'has');
-      statsHasSpy.mockReturnValue(true);
-
-      // 1. Simulate an UNLINK event. This creates a pending unlink lock.
-      fileRenameHandler.getLockTargetEvent(FileSystemEvent.UNLINK, targetPath);
-
-      // 2. Simulate an ADD event on the *same* path. This should find the
-      // pending lock and identify it as a CHANGE event.
-      fileRenameHandler.getLockTargetEvent(FileSystemEvent.ADD, targetPath);
-
-      // Verify that the CHANGE event was emitted correctly.
-      expect(emitEvent).toHaveBeenCalledWith(FileSystemEvent.CHANGE, targetPath);
-      expect(emitEvent).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  describe('reset', () => {
-    it('should reset fileSystemPoller, directoryLocks, and fileLocks', () => {
-      const pollerSpy = vi.spyOn(fileSystemPoller, 'reset');
-      fileRenameHandler.reset();
-
-      expect(pollerSpy).toHaveBeenCalled();
-      expect(fileRenameHandler['directoryLocks']).toBeInstanceOf(FileSystemLocker);
-      expect(fileRenameHandler['fileLocks']).toBeInstanceOf(FileSystemLocker);
-    });
-
-    it('should not clear pending locks from a different handler', () => {
-      vi.useFakeTimers();
-
-      const firstEmitEvent = vi.fn();
-      const secondEmitEvent = vi.fn();
-      const firstHandler = new FileRenameHandler(firstEmitEvent, emitError);
-      const secondHandler = new FileRenameHandler(secondEmitEvent, emitError);
-
-      vi.spyOn(firstHandler.fileStateManager, 'getInodeNumber').mockReturnValue(1);
-      vi.spyOn(secondHandler.fileStateManager, 'getInodeNumber').mockReturnValue(1);
-
-      firstHandler.getLockTargetEvent(FileSystemEvent.ADD, '/first-file', 100);
-      secondHandler.getLockTargetEvent(FileSystemEvent.ADD, '/second-file', 100);
-
-      firstHandler.reset();
-
-      vi.advanceTimersByTime(100);
-
-      expect(firstEmitEvent).not.toHaveBeenCalled();
-      expect(secondEmitEvent).toHaveBeenCalledWith(FileSystemEvent.ADD, '/second-file');
-
-      vi.useRealTimers();
-    });
-  });
-
-  describe('lock overflow handling', () => {
-    it('settles displaced file locks once and removes their resolver state', () => {
-      vi.useFakeTimers();
-      const resolver = new LockResolver({ maxResolvers: 1 });
-      fileRenameHandler = new FileRenameHandler(emitEvent, emitError, resolver);
-      fileSystemPoller = fileRenameHandler.fileStateManager;
-      vi.spyOn(fileSystemPoller, 'getInodeNumber').mockImplementation((targetPath) => targetPath === '/first-file' || targetPath === '/later-file' ? 1 : 2);
-
-      fileRenameHandler.getLockTargetEvent(FileSystemEvent.ADD, '/first-file', 100);
-      fileRenameHandler.getLockTargetEvent(FileSystemEvent.ADD, '/second-file', 100);
-      fileRenameHandler.getLockTargetEvent(FileSystemEvent.UNLINK, '/later-file', 100);
-      vi.advanceTimersByTime(100);
-
-      expect(emitEvent).toHaveBeenCalledTimes(3);
-      expect(emitEvent).toHaveBeenCalledWith(FileSystemEvent.ADD, '/first-file');
-      expect(emitEvent).toHaveBeenCalledWith(FileSystemEvent.ADD, '/second-file');
-      expect(emitEvent).toHaveBeenCalledWith(FileSystemEvent.UNLINK, '/later-file');
-      expect(emitEvent).not.toHaveBeenCalledWith(FileSystemEvent.RENAME, '/first-file', '/later-file');
-      expect(emitError).toHaveBeenCalledTimes(2);
-      expect(fileRenameHandler['fileLocks'].getLock(1)).toBeUndefined();
-      expect(fileRenameHandler['fileLocks'].getLock(2)).toBeUndefined();
-      expect(fileRenameHandler['fileLocks'].getUnlink(1)).toBeUndefined();
-
-      vi.useRealTimers();
-    });
-
-    it('settles displaced directory locks once and removes their resolver state', () => {
-      vi.useFakeTimers();
-      const resolver = new LockResolver({ maxResolvers: 1 });
-      fileRenameHandler = new FileRenameHandler(emitEvent, emitError, resolver);
-      fileSystemPoller = fileRenameHandler.fileStateManager;
-      vi.spyOn(fileSystemPoller, 'getInodeNumber').mockImplementation((targetPath) => targetPath === '/first-dir' || targetPath === '/later-dir' ? 3 : 4);
-
-      fileRenameHandler.getLockTargetEvent(FileSystemEvent.ADD_DIR, '/first-dir', 100);
-      fileRenameHandler.getLockTargetEvent(FileSystemEvent.ADD_DIR, '/second-dir', 100);
-      fileRenameHandler.getLockTargetEvent(FileSystemEvent.UNLINK_DIR, '/later-dir', 100);
-      vi.advanceTimersByTime(100);
-
-      expect(emitEvent).toHaveBeenCalledTimes(3);
-      expect(emitEvent).toHaveBeenCalledWith(FileSystemEvent.ADD_DIR, '/first-dir');
-      expect(emitEvent).toHaveBeenCalledWith(FileSystemEvent.ADD_DIR, '/second-dir');
-      expect(emitEvent).toHaveBeenCalledWith(FileSystemEvent.UNLINK_DIR, '/later-dir');
-      expect(emitEvent).not.toHaveBeenCalledWith(FileSystemEvent.RENAME, '/first-dir', '/later-dir');
-      expect(emitError).toHaveBeenCalledTimes(2);
-      expect(fileRenameHandler['directoryLocks'].getLock(3)).toBeUndefined();
-      expect(fileRenameHandler['directoryLocks'].getLock(4)).toBeUndefined();
-      expect(fileRenameHandler['directoryLocks'].getUnlink(3)).toBeUndefined();
-
-      vi.useRealTimers();
-    });
-
-    it('keeps replacement cleanup when the error callback throws', () => {
-      vi.useFakeTimers();
-      const throwingError = vi.fn(() => { throw new Error('listener failure') });
-      const resolver = new LockResolver({ maxResolvers: 1 });
-      fileRenameHandler = new FileRenameHandler(emitEvent, throwingError, resolver);
-      fileSystemPoller = fileRenameHandler.fileStateManager;
-      vi.spyOn(fileSystemPoller, 'getInodeNumber').mockReturnValue(5);
-
-      fileRenameHandler.getLockTargetEvent(FileSystemEvent.ADD, '/first-file', 100);
-      expect(() => fileRenameHandler.getLockTargetEvent(FileSystemEvent.ADD, '/second-file', 100)).toThrow('listener failure');
-      vi.advanceTimersByTime(100);
-
-      expect(throwingError).toHaveBeenCalledTimes(1);
-      expect(emitEvent).toHaveBeenCalledWith(FileSystemEvent.ADD, '/first-file');
-      expect(emitEvent).toHaveBeenCalledWith(FileSystemEvent.ADD, '/second-file');
-      expect(fileRenameHandler['fileLocks'].getLock(5)).toBeUndefined();
-
-      vi.useRealTimers();
-    });
-  });
+	const handlers: FileRenameHandler[] = [];
+
+	afterEach(() => {
+		for (const handler of handlers.splice(0)) { handler.reset() }
+		cleanupTempRoots();
+	});
+
+	/**
+	 * Creates a handler that records emitted events.
+	 * @param maxResolvers - Optional capacity limit for delayed event settlement.
+	 * @returns The handler and its recorded events.
+	 */
+	function createHandler(maxResolvers?: number) {
+		const emitted: Emitted[] = [];
+		const errors: unknown[] = [];
+		const handler = new FileRenameHandler(
+			(event, path, _stats, next) => { emitted.push(next === undefined ? [ event, path ] : [ event, path, next ]) },
+			(error) => { errors.push(error); return true },
+			new LockResolver({ onError: () => undefined, ...(maxResolvers === undefined ? {} : { maxResolvers }) })
+		);
+		handlers.push(handler);
+
+		return { handler, emitted, errors };
+	}
+
+	/**
+	 * Polls a path and feeds every derived event to the handler, like one event-manager batch.
+	 * @param handler - The handler under test.
+	 * @param paths - Paths polled in the batch, all stat'd before any lock event is processed.
+	 * @param timeout - The rename timeout.
+	 */
+	async function batch(handler: FileRenameHandler, paths: Path[], timeout: number) {
+		const events = [];
+
+		for (const path of paths) {
+			for (const { type, stats } of await handler.fileStateManager.update(path)) { events.push({ type, path, stats }) }
+		}
+
+		for (const { type, path, stats } of events) { handler.getLockTargetEvent(type, path, stats, timeout, new Set()) }
+	}
+
+	it('emits add immediately for an inode no tracked path gave up', async () => {
+		const { handler, emitted } = createHandler();
+		const file = join(createTempRoot('watchr-rename-handler-'), 'new.txt');
+		writeFileSync(file, 'x');
+
+		await batch(handler, [ file ], 10_000);
+
+		expect(emitted).toEqual([[ FileSystemEvent.ADD, file ]]);
+	});
+
+	it('holds an add whose inode was just vacated and pairs it with the unlink as a rename', async () => {
+		const { handler, emitted } = createHandler();
+		const root = createTempRoot('watchr-rename-handler-');
+		const from = join(root, 'a.txt');
+		const to = join(root, 'b.txt');
+		writeFileSync(from, 'x');
+		await batch(handler, [ from ], 10_000);
+		emitted.length = 0;
+
+		renameSync(from, to);
+		// Destination first: the add is processed before the unlink that pairs with it.
+		await batch(handler, [ to, from ], 10_000);
+
+		expect(emitted).toEqual([[ FileSystemEvent.RENAME, from, to ]]);
+	});
+
+	it('does not let a rename target\'s own add swallow its later unlink', async () => {
+		const { handler, emitted } = createHandler();
+		const root = createTempRoot('watchr-rename-handler-');
+		const from = join(root, 'a.txt');
+		const to = join(root, 'b.txt');
+		writeFileSync(from, 'x');
+		await batch(handler, [ from ], 50);
+		emitted.length = 0;
+
+		renameSync(from, to);
+		// Source first: the unlink resolves as a rename via the tracked sibling before the destination's add is seen.
+		await batch(handler, [ from, to ], 50);
+		rmSync(to);
+		await batch(handler, [ to ], 50);
+		await delay(150);
+
+		expect(emitted).toEqual([[ FileSystemEvent.RENAME, from, to ], [ FileSystemEvent.UNLINK, to ]]);
+	});
+
+	it('emits addDir immediately for a new directory', async () => {
+		const { handler, emitted } = createHandler();
+		const dir = join(createTempRoot('watchr-rename-handler-'), 'dir');
+		mkdirSync(dir);
+
+		await batch(handler, [ dir ], 10_000);
+
+		expect(emitted).toEqual([[ FileSystemEvent.ADD_DIR, dir ]]);
+	});
+
+	it('settles an evicted unlink and reports capacity pressure without dropping the removal', async () => {
+		const { handler, emitted, errors } = createHandler(1);
+		const root = createTempRoot('watchr-rename-capacity-');
+		const first = join(root, 'first.txt');
+		const second = join(root, 'second.txt');
+		writeFileSync(first, 'first');
+		writeFileSync(second, 'second');
+		await batch(handler, [ first, second ], 10_000);
+		emitted.length = 0;
+		rmSync(first);
+		rmSync(second);
+		await batch(handler, [ first, second ], 10_000);
+
+		expect(emitted).toEqual([[ FileSystemEvent.UNLINK, first ]]);
+		expect(errors).toEqual([ expect.objectContaining({ message: 'Lock resolver capacity exceeded.' }) ]);
+	});
+
+	it('settles an evicted pending add and reports capacity pressure without dropping the addition', async () => {
+		const { handler, emitted, errors } = createHandler(1);
+		const root = createTempRoot('watchr-rename-capacity-');
+		const first = join(root, 'first.txt');
+		const second = join(root, 'second.txt');
+		const firstTarget = join(root, 'first-target.txt');
+		const secondTarget = join(root, 'second-target.txt');
+		writeFileSync(first, 'first');
+		writeFileSync(second, 'second');
+		await batch(handler, [ first, second ], 10_000);
+		emitted.length = 0;
+		renameSync(first, firstTarget);
+		renameSync(second, secondTarget);
+		writeFileSync(first, 'replacement first');
+		writeFileSync(second, 'replacement second');
+		await batch(handler, [ first, second, firstTarget, secondTarget ], 10_000);
+
+		expect(emitted).toEqual([[ FileSystemEvent.ADD, firstTarget ]]);
+		expect(errors).toEqual([ expect.objectContaining({ message: 'Lock resolver capacity exceeded.' }) ]);
+	});
 });

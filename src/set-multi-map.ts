@@ -1,87 +1,86 @@
-/** A {@link Map} that can contain multiple, unique, values for the same key. */
-export class SetMultiMap<K, V> extends Map<K, Set<V>> {
+/**
+ * A map from a key to a set of unique values.
+ * A lone value is stored inline; a {@link Set} is only allocated once a key holds two or more distinct values, since the
+ * overwhelmingly common case (one path per inode) needs no container.
+ * @internal
+ */
+export class SetMultiMap<K, V> {
+	readonly #slots = new Map<K, V | Set<V>>();
+
 	/**
-	 * Adds a new element with a specified key and value to the SetMultiMap.
-	 * If an element with the same key already exists, the value will be added to the underlying {@link Set}.
-	 * If the value already exists in the {@link Set}, it will not be added again.
-	 *
+	 * Adds a value to a key, promoting the key to a {@link Set} on its second distinct value.
+	 * If the value already exists for the key, it will not be added again.
 	 * @param key - The key to set.
-	 * @param value - The value to add to the SetMultiMap.
+	 * @param value - The value to add.
 	 * @returns The SetMultiMap with the updated key and value.
 	 */
-	override set(key: K, value: V): this;
-	/**
-	 * Adds a new Set with a specified key and value to the SetMultiMap.
-	 * If an element with the same key already exists, the value will be added to the underlying {@link Set}.
-	 * If the value already exists in the {@link Set}, it will not be added again.
-	 *
-	 * @param key - The key to set.
-	 * @param value - The set of values to add to the SetMultiMap.
-	 * @returns The SetMultiMap with the updated key and value.
-	 */
-	override set(key: K, value: Set<V>): this;
-	/**
-	 * Adds a new value with a specified key to the SetMultiMap.
-	 * If an element with the same key already exists, the value will be added to the underlying {@link Set}.
-	 * If the value already exists in the {@link Set}, it will not be added again.
-	 *
-	 * @param key - The key to set.
-	 * @param value - The value to add to the SetMultiMap.
-	 * @returns The SetMultiMap with the updated key and value.
-	 */
-	override set(key: K, value: V | Set<V>) {
-		super.set(key, value instanceof Set ? value : (super.get(key) ?? new Set<V>()).add(value));
+	set(key: K, value: V): this {
+		const slot = this.#slots.get(key);
+
+		if (slot === undefined) {
+			this.#slots.set(key, value);
+		} else if (slot instanceof Set) {
+			slot.add(value);
+		} else if (slot !== value) {
+			this.#slots.set(key, new Set([ slot, value ]));
+		}
 
 		return this;
 	}
 
 	/**
-	 * Finds a value in the Set associated with the specified key that matches the provided iterator function.
-	 *
-	 * @param key - The key to search for.
+	 * Finds the first value for a key that satisfies the given predicate, without allocating.
+	 * @param key - The key to search.
 	 * @param iterator - The function to test each value.
-	 * @returns The first value that satisfies the provided testing function, or `undefined` if no such value is found.
+	 * @returns The first matching value, or `undefined` if none matches or the key does not exist.
 	 */
 	find(key: K, iterator: (value: V) => boolean): V | undefined {
-		const values = this.get(key);
+		const slot = this.#slots.get(key);
 
-		if (values !== undefined) {
-			for (const value of values) {
-				if (iterator(value)) { return value }
-			}
+		if (slot === undefined) { return undefined }
+
+		if (!(slot instanceof Set)) { return iterator(slot) ? slot : undefined }
+
+		for (const value of slot) {
+			if (iterator(value)) { return value }
 		}
 
 		return undefined;
 	}
 
 	/**
-	 * Removes a specific value from a specific key.
-	 *
+	 * Removes a specific value from a key, demoting the key back to an inline value when one remains and removing
+	 * the key entirely when none remain.
 	 * @param key - The key to remove the value from.
 	 * @param value - The value to remove.
 	 * @returns True if the value was removed, false otherwise.
 	 */
-	deleteValue(key: K, value: V | undefined): boolean {
-		if (value === undefined) { return this.delete(key) }
+	deleteValue(key: K, value: V): boolean {
+		const slot = this.#slots.get(key);
 
-		const values = super.get(key);
-		if (values) {
-			const deleted = values.delete(value);
+		if (slot === undefined) { return false }
 
-			if (values.size === 0) {
-				super.delete(key);
-			}
+		if (!(slot instanceof Set)) {
+			if (slot !== value) { return false }
 
-			return deleted;
+			this.#slots.delete(key);
+
+			return true;
 		}
 
-		return false;
+		const deleted = slot.delete(value);
+
+		if (slot.size === 0) {
+			this.#slots.delete(key);
+		} else if (slot.size === 1) {
+			this.#slots.set(key, slot.values().next().value!);
+		}
+
+		return deleted;
 	}
 
-	/**
-	 * @returns The string tag for the SetMultiMap.
-	 */
-	override get [Symbol.toStringTag]() {
-		return 'SetMultiMap';
+	/** Removes every key. */
+	clear(): void {
+		this.#slots.clear();
 	}
 }

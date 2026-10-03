@@ -1,7 +1,27 @@
-import './temporal-polyfill';
-import type { InodeNumber, Stats } from './@types/index';
+import { Temporal as TemporalPolyfill } from 'temporal-polyfill-lite';
+import type { InodeNumber, Stats } from './@types/stats';
 
 const NANOSECONDS_PER_MILLISECOND = 1_000_000n;
+
+/** Bit positions of the type/origin flags packed into {@link WatchrStats}. */
+const StatsFlag = {
+	FILE: 1,
+	DIRECTORY: 2,
+	SYMBOLIC_LINK: 4,
+	SYNTHETIC: 8
+} as const;
+
+/** Flags that describe the entry type; the synthetic bit is excluded from equality. */
+const TYPE_FLAGS_MASK: number = StatsFlag.FILE | StatsFlag.DIRECTORY | StatsFlag.SYMBOLIC_LINK;
+
+/**
+ * Resolves the `Temporal` namespace on every access without ever installing it on `globalThis`.
+ * A host-provided global is preferred; otherwise the polyfill is used as a plain module value.
+ * @returns The `Temporal` namespace to use for constructing instants.
+ */
+function getTemporal(): typeof Temporal {
+	return (globalThis as { Temporal?: typeof Temporal }).Temporal ?? TemporalPolyfill;
+}
 
 /**
  * This class is intended to be used as a wrapper around the stats objects
@@ -10,39 +30,56 @@ const NANOSECONDS_PER_MILLISECOND = 1_000_000n;
  */
 export class WatchrStats {
 	/** The inode number of the file or directory. */
-	private readonly _inodeNumber: InodeNumber;
+	readonly #ino: bigint;
 	/** The size of the file or directory. */
-	private readonly _size: number;
-	/** Last modification time. */
-	private readonly _modifiedTime: Temporal.Instant;
-	/** Last status change time. */
-	private readonly _changeTime: Temporal.Instant;
-	/** Last modification time in milliseconds. */
-	private readonly _modifiedTimeMs: number;
-	/** True if the stats object represents a file. */
-	private readonly _isFile: boolean;
-	/** True if the stats object represents a directory. */
-	private readonly _isDirectory: boolean;
-	/** True if the stats object represents a symbolic link. */
-	private readonly _isSymbolicLink: boolean;
-	private readonly _isSynthetic: boolean;
+	readonly #size: number;
+	/** Last modification time in nanoseconds since the epoch. */
+	readonly #mtimeNs: bigint;
+	/** Last status change time in nanoseconds since the epoch. */
+	readonly #ctimeNs: bigint;
+	/** Packed {@link StatsFlag} bits. */
+	readonly #flags: number;
 
 	/**
 	 * Creates an instance of WatchrStats.
-	 * @param stats - The original stats object to wrap.
-	 * @param isSynthetic - Whether the snapshot is a generated fallback.
+	 * @param ino - The inode number.
+	 * @param size - The size in bytes.
+	 * @param mtimeNs - Last modification time in nanoseconds since the epoch.
+	 * @param ctimeNs - Last status change time in nanoseconds since the epoch.
+	 * @param flags - Packed {@link StatsFlag} bits.
 	 */
-	constructor(stats: Stats, isSynthetic = false) {
-		this._inodeNumber = (stats.ino <= Number.MAX_SAFE_INTEGER) ? Number(stats.ino) : stats.ino;
-		this._size = Number(stats.size);
-		this._modifiedTime = WatchrStats.resolveInstant(stats.mtimeInstant, stats.mtimeNs);
-		this._changeTime = WatchrStats.resolveInstant(stats.ctimeInstant, stats.ctimeNs);
-		const modifiedTimeNanoseconds = this._modifiedTime.epochNanoseconds;
-		this._modifiedTimeMs = Number(modifiedTimeNanoseconds / NANOSECONDS_PER_MILLISECOND) + (Number(modifiedTimeNanoseconds % NANOSECONDS_PER_MILLISECOND) / Number(NANOSECONDS_PER_MILLISECOND));
-		this._isFile = stats.isFile();
-		this._isDirectory = stats.isDirectory();
-		this._isSymbolicLink = stats.isSymbolicLink();
-		this._isSynthetic = isSynthetic;
+	private constructor(ino: bigint, size: number, mtimeNs: bigint, ctimeNs: bigint, flags: number) {
+		this.#ino = ino;
+		this.#size = size;
+		this.#mtimeNs = mtimeNs;
+		this.#ctimeNs = ctimeNs;
+		this.#flags = flags;
+	}
+
+	/**
+	 * Creates a snapshot from a native `Stats` object. Only nanosecond timestamps are read, so this
+	 * works on hosts without a `Temporal` global (where `Stats.mtimeInstant` throws).
+	 * @param stats - The original stats object to wrap.
+	 * @param isSymbolicLink - Forces the symlink flag on; used when `stats` came from a following `stat()` of a known symlink.
+	 * @returns A stats snapshot.
+	 */
+	static fromStats(stats: Stats, isSymbolicLink: boolean = false): WatchrStats {
+		const flags = (stats.isFile() ? StatsFlag.FILE : 0) | (stats.isDirectory() ? StatsFlag.DIRECTORY : 0) | (isSymbolicLink || stats.isSymbolicLink() ? StatsFlag.SYMBOLIC_LINK : 0);
+
+		return new WatchrStats(stats.ino, Number(stats.size), stats.mtimeNs, stats.ctimeNs, flags);
+	}
+
+	/**
+	 * Creates a synthetic snapshot for edge-case events where native watchers do not provide
+	 * enough information to recover a tracked stat.
+	 * @param isDirectory - Whether the synthetic snapshot represents a directory.
+	 * @param nowMs - Timestamp in milliseconds used for both modification and change time.
+	 * @returns A synthetic stats snapshot.
+	 */
+	static synthetic(isDirectory: boolean, nowMs: number = Date.now()): WatchrStats {
+		const nowNs = BigInt(nowMs) * NANOSECONDS_PER_MILLISECOND;
+
+		return new WatchrStats(0n, 0, nowNs, nowNs, (isDirectory ? StatsFlag.DIRECTORY : StatsFlag.FILE) | StatsFlag.SYNTHETIC);
 	}
 
 	/**
@@ -51,7 +88,7 @@ export class WatchrStats {
 	 * @returns The last modification time.
 	 */
 	get modifiedTime(): Temporal.Instant {
-		return this._modifiedTime;
+		return getTemporal().Instant.fromEpochNanoseconds(this.#mtimeNs);
 	}
 
 	/**
@@ -60,7 +97,23 @@ export class WatchrStats {
 	 * @returns The last status change time.
 	 */
 	get changeTime(): Temporal.Instant {
-		return this._changeTime;
+		return getTemporal().Instant.fromEpochNanoseconds(this.#ctimeNs);
+	}
+
+	/**
+	 * Returns the last modification time in nanoseconds since the epoch.
+	 * @returns The last modification time in nanoseconds.
+	 */
+	get modifiedTimeNs(): bigint {
+		return this.#mtimeNs;
+	}
+
+	/**
+	 * Returns the last status change time in nanoseconds since the epoch.
+	 * @returns The last status change time in nanoseconds.
+	 */
+	get changeTimeNs(): bigint {
+		return this.#ctimeNs;
 	}
 
 	/**
@@ -69,7 +122,7 @@ export class WatchrStats {
 	 * @returns The inode number of the file or directory.
 	 */
 	get inodeNumber(): InodeNumber {
-		return this._inodeNumber;
+		return this.#ino <= Number.MAX_SAFE_INTEGER ? Number(this.#ino) : this.#ino;
 	}
 
 	/**
@@ -78,7 +131,7 @@ export class WatchrStats {
 	 * @returns The size of the file or directory.
 	 */
 	get size(): number {
-		return this._size;
+		return this.#size;
 	}
 
 	/**
@@ -87,7 +140,7 @@ export class WatchrStats {
 	 * @returns The last modification time in milliseconds.
 	 */
 	get modifiedTimeMs(): number {
-		return this._modifiedTimeMs;
+		return Number(this.#mtimeNs / NANOSECONDS_PER_MILLISECOND) + (Number(this.#mtimeNs % NANOSECONDS_PER_MILLISECOND) / Number(NANOSECONDS_PER_MILLISECOND));
 	}
 
 	/**
@@ -96,7 +149,7 @@ export class WatchrStats {
 	 * @returns True if the stats object represents a file. Otherwise, false.
 	 */
 	isFile(): boolean {
-		return this._isFile;
+		return (this.#flags & StatsFlag.FILE) !== 0;
 	}
 
 	/**
@@ -105,16 +158,18 @@ export class WatchrStats {
 	 * @returns True if the stats object represents a directory. Otherwise, false.
 	 */
 	isDirectory(): boolean {
-		return this._isDirectory;
+		return (this.#flags & StatsFlag.DIRECTORY) !== 0;
 	}
 
 	/**
-	 * Returns true if the stats object represents a symbolic link.
+	 * Returns true if the entry is a symbolic link. Size, timestamps and `isFile()`/`isDirectory()` still describe the
+	 * link's target. This is true only for entries discovered as symlinks during a scan (and kept for later events on
+	 * that path); a symlink first seen through a live event under `followSymlinks: true` reports `false`.
 	 *
 	 * @returns True if the stats object represents a symbolic link. Otherwise, false.
 	 */
 	isSymbolicLink(): boolean {
-		return this._isSymbolicLink;
+		return (this.#flags & StatsFlag.SYMBOLIC_LINK) !== 0;
 	}
 
 	/**
@@ -122,7 +177,7 @@ export class WatchrStats {
 	 * @returns True for synthetic snapshots, otherwise false.
 	 */
 	get isSynthetic(): boolean {
-		return this._isSynthetic;
+		return (this.#flags & StatsFlag.SYNTHETIC) !== 0;
 	}
 
 	/**
@@ -132,22 +187,10 @@ export class WatchrStats {
 	 * @returns True when inode, size, timestamps, and type flags match.
 	 */
 	equals(other: WatchrStats): boolean {
-		return this._inodeNumber === other._inodeNumber
-			&& this._size === other._size
-			&& this._modifiedTime.equals(other._modifiedTime)
-			&& this._changeTime.equals(other._changeTime)
-			&& this._isFile === other._isFile
-			&& this._isDirectory === other._isDirectory
-			&& this._isSymbolicLink === other._isSymbolicLink;
-	}
-
-	/**
-	 * Resolves a temporal instant from stats fields across Node versions.
-	 * @param instant - Native instant when available.
-	 * @param nanoseconds - Nanosecond timestamp fallback.
-	 * @returns A temporal instant.
-	 */
-	private static resolveInstant(instant: Temporal.Instant | undefined, nanoseconds: bigint): Temporal.Instant {
-		return instant ?? Temporal.Instant.fromEpochNanoseconds(nanoseconds);
+		return this.#ino === other.#ino
+			&& this.#size === other.#size
+			&& this.#mtimeNs === other.#mtimeNs
+			&& this.#ctimeNs === other.#ctimeNs
+			&& (this.#flags & TYPE_FLAGS_MASK) === (other.#flags & TYPE_FLAGS_MASK);
 	}
 }

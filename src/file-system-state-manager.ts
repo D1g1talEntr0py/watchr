@@ -1,27 +1,35 @@
 import { SetMultiMap } from './set-multi-map';
 import { FileSystem } from './file-system';
 import { WatchrStats } from './watchr-stats';
-import { FileSystemEvent, InodeType } from './constants';
-import type { InodeNumber, Path } from './@types/index';
+import { FileSystemEvent, InodeType, renameTimeout } from './constants';
+import type { InodeNumber, Path, StateEvent, StateUpdateOptions } from './@types/index';
 
-type InodeEntry = { event: FileSystemEvent, targetPath: Path, inodeNumber: InodeNumber, inodeType: InodeType };
+type InodeEntry = { inodeNumber: InodeNumber, inodeType: InodeType };
 
-/** Polls the file system for changes */
+/**
+ * Polls the file system for changes
+ * @internal
+ */
 export class FileSystemStateManager {
-	private static readonly maxTrackedEventInodes: number = 50000;
-	private readonly targetInodes = new Map<FileSystemEvent, Map<Path, InodeEntry>>();
-	/** Insertion-ordered LRU view over the entries held by {@link targetInodes}. */
-	private readonly targetInodeOrder = new Set<InodeEntry>();
-	private readonly _paths = new SetMultiMap<InodeNumber, Path>();
-	private readonly _stats = new Map<Path, WatchrStats>();
-	private generation = 0;
+	static readonly #maxTrackedEventInodes: number = 50000;
+	/**
+	 * Last inode seen per (event, path), keyed by `${event}\0${path}`.
+	 * Map insertion order doubles as the LRU order: touching an entry deletes and re-inserts it.
+	 */
+	readonly #targetInodes = new Map<string, InodeEntry>();
+	readonly #paths = new SetMultiMap<InodeNumber, Path>();
+	readonly #stats = new Map<Path, WatchrStats>();
+	/** When each inode last lost a tracked path, oldest first; lets an add tell a possible rename target from a new file. */
+	readonly #vacatedInodes = new Map<InodeNumber, number>();
+	#vacatedRetentionMs: number = renameTimeout;
+	#generation = 0;
 
 	/**
 	 * Gets the paths being watched.
 	 * @returns A set multi-map of paths being watched.
 	 */
 	get paths(): SetMultiMap<InodeNumber, Path> {
-		return this._paths;
+		return this.#paths;
 	}
 
 	/**
@@ -29,7 +37,7 @@ export class FileSystemStateManager {
 	 * @returns A map of paths to their stats.
 	 */
 	get stats(): Map<Path, WatchrStats> {
-		return this._stats;
+		return this.#stats;
 	}
 
 	/**
@@ -40,7 +48,7 @@ export class FileSystemStateManager {
 	 * @returns The inode number if it exists, otherwise undefined.
 	 */
 	getInodeNumber(targetPath: Path, event: FileSystemEvent, type?: InodeType): InodeNumber | undefined {
-		const entry = this.targetInodes.get(event)?.get(targetPath);
+		const entry = this.#targetInodes.get(FileSystemStateManager.#inodeKey(event, targetPath));
 
 		if (entry === undefined) { return undefined }
 
@@ -48,30 +56,55 @@ export class FileSystemStateManager {
 	}
 
 	/**
+	 * Checks whether an inode stopped backing a tracked path within the last `windowMs` milliseconds.
+	 * @param inodeNumber - The inode to check.
+	 * @param windowMs - The look-back window in milliseconds.
+	 * @returns True when the inode was vacated inside the window.
+	 */
+	wasVacatedWithin(inodeNumber: InodeNumber, windowMs: number): boolean {
+		if (windowMs > this.#vacatedRetentionMs) { this.#vacatedRetentionMs = windowMs }
+
+		const vacatedAt = this.#vacatedInodes.get(inodeNumber);
+
+		return vacatedAt !== undefined && performance.now() - vacatedAt <= windowMs;
+	}
+
+	/**
+	 * Builds the {@link targetInodes} key for an event and path.
+	 * @param event - The file system event.
+	 * @param targetPath - The path.
+	 * @returns The composite key.
+	 */
+	static #inodeKey(event: FileSystemEvent, targetPath: Path): string {
+		return `${event}\0${targetPath}`;
+	}
+
+	/**
 	 * Updates the file system state for a specific path.
 	 * @param targetPath - The path to update.
-	 * @returns A list of file system events that occurred.
+	 * @param options - Optional stat cancellation signal/timeout and symlink handling.
+	 * @returns The file system events that occurred, each paired with the stats to emit it with.
 	 */
-	async update(targetPath: Path): Promise<FileSystemEvent[]> {
-		const generation = this.generation;
+	async update(targetPath: Path, options?: StateUpdateOptions): Promise<StateEvent[]> {
+		const generation = this.#generation;
 		let nextStats: WatchrStats | undefined;
 
 		try {
-			nextStats = await this.getStats(targetPath);
+			nextStats = await this.#getStats(targetPath, options);
 		} catch (error: unknown) {
-			if (generation !== this.generation) { return [] }
+			if (generation !== this.#generation) { return [] }
 
 			throw error;
 		}
 
-		if (generation !== this.generation) { return [] }
+		if (generation !== this.#generation) { return [] }
 
-		const events = this.determineEvents(this._stats.get(targetPath), nextStats);
+		const events = this.#determineEvents(this.#stats.get(targetPath), nextStats);
 
-		this.updateStats(targetPath, nextStats);
-		this.updateInodes(targetPath, events);
+		this.#updateStats(targetPath, nextStats);
+		this.#updateInodes(targetPath, events);
 
-		return events.map((event) => event.type);
+		return events;
 	}
 
 	/**
@@ -80,7 +113,7 @@ export class FileSystemStateManager {
 	 * @param nextStats - The current stats for the path.
 	 * @returns An array of events with their associated stats.
 	 */
-	private determineEvents(previousStats?: WatchrStats, nextStats?: WatchrStats): Array<{type: FileSystemEvent, stats: WatchrStats}> {
+	#determineEvents(previousStats?: WatchrStats, nextStats?: WatchrStats): StateEvent[] {
 		// Extract file type information once
 		const wasFile = previousStats?.isFile() ?? false;
 		const isFile = nextStats?.isFile() ?? false;
@@ -99,8 +132,8 @@ export class FileSystemStateManager {
 			case 14: return [ { type: FileSystemEvent.UNLINK, stats: previousStats! }, { type: FileSystemEvent.ADD_DIR, stats: nextStats! } ];
 			// Directory to file (1101)
 			case 13: return [ { type: FileSystemEvent.UNLINK_DIR, stats: previousStats! }, { type: FileSystemEvent.ADD, stats: nextStats! } ];
-			// Directory to directory (1100)
-			case 12: return previousStats!.equals(nextStats!) ? [] : [ { type: FileSystemEvent.UNLINK_DIR, stats: previousStats! }, { type: FileSystemEvent.ADD_DIR, stats: nextStats! } ];
+			// Directory to directory (1100): only a swapped inode is a replacement; mtime/ctime churn from children is not an event
+			case 12: return previousStats!.inodeNumber === nextStats!.inodeNumber ? [] : [ { type: FileSystemEvent.UNLINK_DIR, stats: previousStats! }, { type: FileSystemEvent.ADD_DIR, stats: nextStats! } ];
 			// No change (0000) - no old, no new
 			default: return [];
 		}
@@ -111,9 +144,9 @@ export class FileSystemStateManager {
 	 * @param targetPath - The path to update inodes for.
 	 * @param events - The events with their associated stats.
 	 */
-	private updateInodes(targetPath: Path, events: Array<{type: FileSystemEvent, stats: WatchrStats}>) {
+	#updateInodes(targetPath: Path, events: StateEvent[]) {
 		for (const event of events) {
-			this.updateInode(targetPath, event.type, event.stats);
+			this.#updateInode(targetPath, event.type, event.stats);
 		}
 	}
 
@@ -121,24 +154,31 @@ export class FileSystemStateManager {
 	 * Resets the file system poller state.
 	 */
 	reset(): void {
-		this.generation++;
-		this._paths.clear();
-		this._stats.clear();
-		this.targetInodes.clear();
-		this.targetInodeOrder.clear();
+		this.#generation++;
+		this.#paths.clear();
+		this.#stats.clear();
+		this.#targetInodes.clear();
+		this.#vacatedInodes.clear();
 	}
 
 	/**
-	 * Gets the stats for a specific path.
+	 * Gets the stats for a specific path. Regular paths cost a single `stat`; the extra `lstat` runs only for an
+	 * untracked path under `followSymlinks: false`, so a new symlink can be dropped instead of tracked as its target.
 	 * @param targetPath - The path to get the stats for.
-	 * @returns The stats for the path, or undefined if not found.
+	 * @param options - Optional stat cancellation signal/timeout and symlink handling.
+	 * @returns The stats for the path, or undefined if not found (or dropped).
 	 */
-	private async getStats(targetPath: Path) {
-		const stats = await FileSystem.getStats(targetPath);
+	async #getStats(targetPath: Path, options?: StateUpdateOptions) {
+		const stats = await FileSystem.getStats(targetPath, options);
 
 		if (!stats || !(stats.isFile() || stats.isDirectory())) { return }
 
-		return new WatchrStats(stats);
+		const previousStats = this.#stats.get(targetPath);
+
+		if (previousStats === undefined && options?.followSymlinks === false && await FileSystem.isSymbolicLink(targetPath, options.sync === true)) { return }
+
+		// The symlink flag is sticky for a tracked path: live polls `stat()` the target and cannot see the link itself.
+		return WatchrStats.fromStats(stats, options?.isSymbolicLink === true || (previousStats !== undefined && previousStats.isSymbolicLink()));
 	}
 
 	/**
@@ -147,49 +187,35 @@ export class FileSystemStateManager {
 	 * @param event - The file system event that occurred.
 	 * @param stats - The stats for the path.
 	 */
-	private updateInode(targetPath: Path, event: FileSystemEvent, stats: WatchrStats) {
-		let eventInodes = this.targetInodes.get(event);
-
-		if (eventInodes === undefined) { this.targetInodes.set(event, eventInodes = new Map<Path, InodeEntry>()) }
-
+	#updateInode(targetPath: Path, event: FileSystemEvent, stats: WatchrStats) {
+		const key = FileSystemStateManager.#inodeKey(event, targetPath);
 		const inodeType = stats.isFile() ? InodeType.FILE : InodeType.DIR;
-		const existingEntry = eventInodes.get(targetPath);
+		const existingEntry = this.#targetInodes.get(key);
 
 		if (existingEntry !== undefined) {
 			existingEntry.inodeNumber = stats.inodeNumber;
 			existingEntry.inodeType = inodeType;
-			// Re-insert to move the entry to the most-recently-used end of the set.
-			this.targetInodeOrder.delete(existingEntry);
-			this.targetInodeOrder.add(existingEntry);
+			// Re-insert to move the entry to the most-recently-used end.
+			this.#targetInodes.delete(key);
+			this.#targetInodes.set(key, existingEntry);
 
 			return;
 		}
 
-		const entry: InodeEntry = { event, targetPath, inodeNumber: stats.inodeNumber, inodeType };
-
-		eventInodes.set(targetPath, entry);
-		this.targetInodeOrder.add(entry);
-		this.pruneTrackedInodes();
+		this.#targetInodes.set(key, { inodeNumber: stats.inodeNumber, inodeType });
+		this.#pruneTrackedInodes();
 	}
 
 	/**
 	 * Prunes tracked inode events to keep memory bounded in long-running processes.
 	 */
-	private pruneTrackedInodes() {
-		while (this.targetInodeOrder.size > FileSystemStateManager.maxTrackedEventInodes) {
-			const oldestEntry = this.targetInodeOrder.values().next().value;
+	#pruneTrackedInodes() {
+		while (this.#targetInodes.size > FileSystemStateManager.#maxTrackedEventInodes) {
+			const oldestKey = this.#targetInodes.keys().next().value;
 
-			if (oldestEntry === undefined) { break }
+			if (oldestKey === undefined) { break }
 
-			this.targetInodeOrder.delete(oldestEntry);
-
-			const eventInodes = this.targetInodes.get(oldestEntry.event);
-
-			if (eventInodes === undefined) { continue }
-
-			eventInodes.delete(oldestEntry.targetPath);
-
-			if (eventInodes.size === 0) { this.targetInodes.delete(oldestEntry.event) }
+			this.#targetInodes.delete(oldestKey);
 		}
 	}
 
@@ -198,18 +224,36 @@ export class FileSystemStateManager {
 	 * @param targetPath - The path to update.
 	 * @param stats - The new stats for the path.
 	 */
-	private updateStats(targetPath: Path, stats?: WatchrStats) {
-		const previousStats = this._stats.get(targetPath);
+	#updateStats(targetPath: Path, stats?: WatchrStats) {
+		const previousStats = this.#stats.get(targetPath);
 
 		if (previousStats && (!stats || previousStats.inodeNumber !== stats.inodeNumber)) {
-			this._paths.deleteValue(previousStats.inodeNumber, targetPath);
+			this.#paths.deleteValue(previousStats.inodeNumber, targetPath);
+			this.#recordVacated(previousStats.inodeNumber);
 		}
 
 		if (stats) {
-			this._paths.set(stats.inodeNumber, targetPath);
-			this._stats.set(targetPath, stats);
+			this.#paths.set(stats.inodeNumber, targetPath);
+			this.#stats.set(targetPath, stats);
 		} else {
-			this._stats.delete(targetPath);
+			this.#stats.delete(targetPath);
+		}
+	}
+
+	/**
+	 * Records that an inode lost a tracked path, pruning entries past the retention window or the size cap.
+	 * @param inodeNumber - The vacated inode.
+	 */
+	#recordVacated(inodeNumber: InodeNumber) {
+		const now = performance.now();
+
+		this.#vacatedInodes.delete(inodeNumber);
+		this.#vacatedInodes.set(inodeNumber, now);
+
+		for (const [ oldestInode, vacatedAt ] of this.#vacatedInodes) {
+			if (now - vacatedAt <= this.#vacatedRetentionMs && this.#vacatedInodes.size <= FileSystemStateManager.#maxTrackedEventInodes) { break }
+
+			this.#vacatedInodes.delete(oldestInode);
 		}
 	}
 }

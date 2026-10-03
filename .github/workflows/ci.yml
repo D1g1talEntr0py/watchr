@@ -65,3 +65,21 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm bench:ci --tolerance 0.5
+
+  windows:
+    name: Windows (Tier 2, non-blocking)
+    runs-on: windows-latest
+    # Tier 2 canary: failures here never block a merge (see README "Platform Support").
+    continue-on-error: true
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm vitest run tests/watchr.integration.test.ts tests/regressions/event-ordering.test.ts tests/regressions/root-lifecycle.test.ts tests/regressions/listener-safety.test.ts tests/regressions/global-pollution.test.ts

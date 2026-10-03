@@ -1,18 +1,62 @@
-import { dirname, resolve } from 'node:path';
+import { basename, dirname, resolve } from 'node:path';
 import type { FSWatcher } from 'node:fs';
 import { FileSystem } from './file-system';
 import { NodeWatcherEvent, NodeTargetEvent, FileSystemEvent } from './constants';
 import type { Watchr } from './watchr';
+import type { FileRenameHandler } from './file-rename-handler';
 import type { FileSystemStateManager } from './file-system-state-manager';
-import type { Event, NodeEventHandler, Path, WatchrOptions, WatchrConfig } from './@types/index';
+import type { DirectoryReadOptions, Event, NodeEventHandler, Path, StateUpdateOptions, NormalizedWatchrOptions, WatchrConfig, WatchIgnore } from './@types/index';
 
-/** Manages file system events for a specific folder */
+type WatchrEventHooks = {
+	renameHandler: FileRenameHandler;
+	reportError: (error: unknown) => boolean;
+	closeWatchers: (folderPath?: Path, filePath?: Path) => void;
+};
+
+/**
+ * Manages file system events for a specific folder
+ * @internal
+ */
 export class FileSystemEventManager {
-	// TODO: Consider exposing this as a watch option for platform/workload tuning.
-	private static readonly directoryFallbackScanIntervalMs = 10;
-	private static readonly maxConcurrentWatcherEventDispatches = 32;
+	#lock: Promise<void>;
+	#initialSymlinks: ReadonlySet<Path> | undefined;
+	#flushQueued: boolean;
+	#flushAfterLockScheduled: boolean;
+	#directoryFallbackScanScheduled: boolean;
+	#directoryFallbackScanQueued: boolean;
+	#directoryFallbackScanTimer: ReturnType<typeof setTimeout> | undefined;
+	#directoryFallbackScanInFlight: Promise<void> | undefined;
+	#directoryFallbackScanEvent: NodeTargetEvent | undefined;
+	#lastDirectoryFallbackScanAt: number;
+	readonly #fileSystemPoller: FileSystemStateManager;
+	readonly #watchr: Watchr;
+	readonly #hooks: WatchrEventHooks;
+	readonly #watcher: FSWatcher;
+	readonly #options: NormalizedWatchrOptions;
+	/** Precompiled ignore predicate; falls back to the raw option for configs built without normalization. */
+	readonly #ignore: WatchIgnore | undefined;
+	readonly #folderPath: Path;
+	readonly #filePath: Path | undefined;
+	readonly #initials: Event[];
+	readonly #regulars: Set<Path>;
+	readonly #nodeEventHandler: NodeEventHandler;
+	/** Aborted by {@link cleanup} (or by the watcher closing) so in-flight scans cannot feed a stale manager. */
+	readonly #abortController: AbortController;
+	readonly #abortSignal: AbortSignal;
+	/** Stat options for the initial scan: cancellable, never time-limited. */
+	readonly #initialStatOptions: StateUpdateOptions;
+	/** {@link initialStatOptions} for entries `readdir` reported as symlinks, so their stats carry the symlink flag. */
+	readonly #initialSymlinkStatOptions: StateUpdateOptions;
+	/** Stat options for live polls: time-limited so a stuck stat cannot stall a batch. */
+	readonly #liveStatOptions: StateUpdateOptions;
+	/** Symlink entries of the in-progress initial scan; undefined outside the scan. */
+	readonly #watcherChangeHandler: (event?: NodeTargetEvent, targetName?: string | null) => void;
+	readonly #watcherErrorHandler: (error: NodeJS.ErrnoException) => void;
+	static readonly #maxConcurrentWatcherEventDispatches = 32;
+	/** Longest the initial scan may block the event loop before yielding. */
+	static readonly #initialScanSliceMs = 8;
 	/** Event priorities used to keep the highest-priority event per path during deduplication. */
-	private static readonly eventPriorities = new Map<FileSystemEvent, number>([
+	static readonly #eventPriorities: Map<FileSystemEvent, number> = new Map([
 		[ FileSystemEvent.ADD, 4 ],
 		[ FileSystemEvent.ADD_DIR, 4 ],
 		[ FileSystemEvent.CHANGE, 3 ],
@@ -22,52 +66,38 @@ export class FileSystemEventManager {
 		[ FileSystemEvent.UNLINK_DIR, 1 ]
 	]);
 
-	private lock: Promise<void>;
-	private readonly fileSystemPoller: FileSystemStateManager;
-	private readonly watchr: Watchr;
-	private readonly watcher: FSWatcher;
-	private readonly options: WatchrOptions;
-	private readonly folderPath: Path;
-	private readonly filePath: Path | undefined;
-	private readonly initials: Event[];
-	private readonly regulars: Set<Path>;
-	private readonly nodeEventHandler: NodeEventHandler;
-	private batchRevision: number;
-	private flushQueued: boolean;
-	private flushAfterLockScheduled: boolean;
-	private directoryFallbackScanScheduled: boolean;
-	private directoryFallbackScanQueued: boolean;
-	private directoryFallbackScanTimer: ReturnType<typeof setTimeout> | undefined;
-	private directoryFallbackScanInFlight: Promise<void> | undefined;
-	private directoryFallbackScanEvent: NodeTargetEvent | undefined;
-	private lastDirectoryFallbackScanAt: number;
-	private readonly watcherChangeHandler: (event?: NodeTargetEvent, targetName?: string | null) => void;
-	private readonly watcherErrorHandler: (error: NodeJS.ErrnoException) => void;
-
 	/**
 	 * Creates a new instance of FileSystemEventManager
 	 * @param fileSystemPoller The file system poller to use
 	 * @param watchr The watchr instance
 	 * @param watcherConfig The watcher configuration
+	 * @param hooks Capabilities supplied by the owning watcher
 	 */
-	private constructor(fileSystemPoller: FileSystemStateManager, watchr: Watchr, watcherConfig: WatchrConfig) {
-		this.lock = watchr.readyLock;
-		this.fileSystemPoller = fileSystemPoller;
-		this.watchr = watchr;
-		this.initials = [];
-		this.regulars = new Set();
-		this.batchRevision = 0;
-		this.flushQueued = false;
-		this.flushAfterLockScheduled = false;
-		this.directoryFallbackScanScheduled = false;
-		this.directoryFallbackScanQueued = false;
-		this.directoryFallbackScanTimer = undefined;
-		this.directoryFallbackScanInFlight = undefined;
-		this.directoryFallbackScanEvent = undefined;
-		this.lastDirectoryFallbackScanAt = 0;
-		this.watcherChangeHandler = this.onWatcherChange.bind(this);
-		this.watcherErrorHandler = this.handleWatchrError.bind(this);
-		({ watcher: this.watcher, options: this.options, folderPath: this.folderPath, filePath: this.filePath, nodeHandler: this.nodeEventHandler = this.generateNodeEventHandler() } = watcherConfig);
+	private constructor(fileSystemPoller: FileSystemStateManager, watchr: Watchr, watcherConfig: WatchrConfig, hooks: WatchrEventHooks) {
+		this.#lock = watchr.readyLock;
+		this.#fileSystemPoller = fileSystemPoller;
+		this.#watchr = watchr;
+		this.#hooks = hooks;
+		this.#initials = [];
+		this.#regulars = new Set();
+		this.#flushQueued = false;
+		this.#flushAfterLockScheduled = false;
+		this.#directoryFallbackScanScheduled = false;
+		this.#directoryFallbackScanQueued = false;
+		this.#directoryFallbackScanTimer = undefined;
+		this.#directoryFallbackScanInFlight = undefined;
+		this.#directoryFallbackScanEvent = undefined;
+		this.#lastDirectoryFallbackScanAt = 0;
+		this.#watcherChangeHandler = this.#onWatcherChange.bind(this);
+		this.#watcherErrorHandler = this.#handleWatchrError.bind(this);
+		({ watcher: this.#watcher, options: this.#options, folderPath: this.#folderPath, filePath: this.#filePath, nodeHandler: this.#nodeEventHandler = this.#generateNodeEventHandler() } = watcherConfig);
+		this.#ignore = this.#options.ignoreMatcher ?? this.#options.ignore;
+		this.#abortController = new AbortController();
+		this.#abortSignal = AbortSignal.any([ watchr.abortSignal, this.#abortController.signal ]);
+		this.#initialStatOptions = { signal: this.#abortSignal, followSymlinks: this.#options.followSymlinks, sync: true };
+		this.#initialSymlinkStatOptions = { ...this.#initialStatOptions, isSymbolicLink: true };
+		this.#liveStatOptions = { timeout: this.#options.statTimeout, followSymlinks: this.#options.followSymlinks };
+		this.#initialSymlinks = undefined;
 	}
 
 	/**
@@ -75,62 +105,119 @@ export class FileSystemEventManager {
 	 * @param fileSystemPoller The file system poller to use
 	 * @param watchr The watchr instance
 	 * @param watcherConfig The watcher configuration
+	 * @param hooks Capabilities supplied by the owning watcher
 	 * @returns A Promise of a FileSystemEventManager
 	 */
-	static async newInstance(fileSystemPoller: FileSystemStateManager, watchr: Watchr, watcherConfig: WatchrConfig): Promise<FileSystemEventManager> {
-		return new FileSystemEventManager(fileSystemPoller, watchr, watcherConfig).initializeEvents();
+	static async newInstance(fileSystemPoller: FileSystemStateManager, watchr: Watchr, watcherConfig: WatchrConfig, hooks: WatchrEventHooks): Promise<FileSystemEventManager> {
+		return new FileSystemEventManager(fileSystemPoller, watchr, watcherConfig, hooks).#initializeEvents();
 	}
 
 	/**
 	 * Initializes event listeners and handles initial scan
 	 * @returns A Promise that resolves to a FileSystemEventManager
 	 */
-	private async initializeEvents() {
-		this.watcher.on(NodeWatcherEvent.CHANGE, this.watcherChangeHandler);
-		this.watcher.on(NodeWatcherEvent.ERROR, this.watcherErrorHandler);
+	async #initializeEvents() {
+		this.#watcher.on(NodeWatcherEvent.CHANGE, this.#watcherChangeHandler);
+		this.#watcher.on(NodeWatcherEvent.ERROR, this.#watcherErrorHandler);
 
 		// "isInitial" => is ignorable via the "ignoreInitial" option
-		const isInitial = !this.watchr.isReady();
+		const isInitial = !this.#watchr.isReady();
 
 		// Single initial path
-		if (this.filePath) {
+		if (this.#filePath) {
 			// Already polled
-			if (this.fileSystemPoller.stats.has(this.filePath)) { return this }
+			if (this.#fileSystemPoller.stats.has(this.#filePath)) { return this }
 
-			await this.onWatcherEvent(NodeTargetEvent.CHANGE, this.filePath, isInitial);
+			await this.#onWatcherEvent(NodeTargetEvent.CHANGE, this.#filePath, isInitial);
 		} else {
-			// Multiple initial paths
-			const ignore = (targetPath: Path) => this.watchr.isIgnored(targetPath, this.options.ignore);
-			const { directories, files } = await FileSystem.readDirectory(this.folderPath, { signal: this.watchr.abortSignal, ignore });
+			// Multiple initial paths; `readDirectory` applies the ignore matcher, so only the root itself is re-checked.
+			const { directories, files, symlinks } = await FileSystem.readDirectory(this.#folderPath, this.#directoryReadOptions());
+			const rootPaths = this.#isIgnored(this.#folderPath) ? [] : [ this.#folderPath ];
 
-			await Promise.all([ this.folderPath, ...directories, ...files ].map(async (targetPath) => {
-				// Already polled
-				if (this.fileSystemPoller.stats.has(targetPath)) { return }
+			this.#initialSymlinks = symlinks.size === 0 ? undefined : symlinks;
 
-				if (this.watchr.isIgnored(targetPath, this.options.ignore)) { return }
-
-				return this.onWatcherEvent(NodeTargetEvent.CHANGE, targetPath, isInitial);
-			}));
+			try {
+				await this.#scanInitialPaths([ ...rootPaths, ...directories, ...files ], isInitial);
+			} finally {
+				this.#initialSymlinks = undefined;
+			}
 		}
 
 		return this;
 	}
 
 	/**
-	 * Removes watcher listeners and closes the native watcher so no stale handles remain.
+	 * Checks a path against the watcher's ignore option.
+	 * @param targetPath The path to check
+	 * @returns True when the path is ignored
+	 */
+	#isIgnored(targetPath: Path): boolean {
+		return this.#ignore !== undefined && this.#watchr.isIgnored(targetPath, this.#ignore);
+	}
+
+	/**
+	 * Builds the options for reading the watched root: honors `recursive` and `followSymlinks`, applies the ignore
+	 * matcher, and is cancelled by this manager's signal.
+	 * @returns The directory read options
+	 */
+	#directoryReadOptions(): DirectoryReadOptions {
+		const options: DirectoryReadOptions = { recursive: this.#options.recursive, followSymlinks: this.#options.followSymlinks, signal: this.#abortSignal };
+
+		if (this.#ignore !== undefined) { options.ignore = (targetPath: Path) => this.#isIgnored(targetPath) }
+
+		return options;
+	}
+
+	/**
+	 * Polls the initial paths sequentially with blocking stats, yielding to the event loop every few milliseconds.
+	 * A failing path is reported as an error and skipped so one bad entry can never fail the whole scan; the loop
+	 * stops early once the watcher aborts.
+	 * @param targetPaths The paths discovered for the initial scan
+	 * @param isInitial Whether the resulting events are ignorable via `ignoreInitial`
+	 */
+	async #scanInitialPaths(targetPaths: Path[], isInitial: boolean): Promise<void> {
+		const signal = this.#abortSignal;
+		let sliceStart = performance.now();
+
+		for (const targetPath of targetPaths) {
+			if (signal.aborted) { return }
+
+			if (performance.now() - sliceStart >= FileSystemEventManager.#initialScanSliceMs) {
+				await new Promise(setImmediate);
+				if (signal.aborted) { return }
+				sliceStart = performance.now();
+			}
+
+			// Already polled
+			if (this.#fileSystemPoller.stats.has(targetPath)) { continue }
+
+			try {
+				await this.#onWatcherEvent(NodeTargetEvent.CHANGE, targetPath, isInitial);
+			} catch (error: unknown) {
+				if (signal.aborted) { return }
+
+				this.#hooks.reportError(new Error('Initial scan skipped path.', { cause: error }));
+			}
+		}
+	}
+
+	/**
+	 * Removes watcher listeners, aborts any in-flight scan, and closes the native watcher so no stale handles remain.
 	 */
 	cleanup(): void {
-		if (this.directoryFallbackScanTimer !== undefined) {
-			clearTimeout(this.directoryFallbackScanTimer);
-			this.directoryFallbackScanTimer = undefined;
+		this.#abortController.abort();
+
+		if (this.#directoryFallbackScanTimer !== undefined) {
+			clearTimeout(this.#directoryFallbackScanTimer);
+			this.#directoryFallbackScanTimer = undefined;
 		}
 
-		this.directoryFallbackScanQueued = false;
-		this.directoryFallbackScanScheduled = false;
-		this.directoryFallbackScanEvent = undefined;
-		this.watcher.removeListener(NodeWatcherEvent.CHANGE, this.watcherChangeHandler);
-		this.watcher.removeListener(NodeWatcherEvent.ERROR, this.watcherErrorHandler);
-		this.watcher.close();
+		this.#directoryFallbackScanQueued = false;
+		this.#directoryFallbackScanScheduled = false;
+		this.#directoryFallbackScanEvent = undefined;
+		this.#watcher.removeListener(NodeWatcherEvent.CHANGE, this.#watcherChangeHandler);
+		this.#watcher.removeListener(NodeWatcherEvent.ERROR, this.#watcherErrorHandler);
+		this.#watcher.close();
 	}
 
 	/**
@@ -138,8 +225,8 @@ export class FileSystemEventManager {
 	 * @param targetPath The path to check
 	 * @returns True if the path is within the watched root, false otherwise
 	 */
-	private isSubRoot(targetPath: Path) {
-		return this.filePath ? targetPath === this.filePath : targetPath === this.folderPath || FileSystem.isSubPath(this.folderPath, targetPath);
+	#isSubRoot(targetPath: Path) {
+		return this.#filePath ? targetPath === this.#filePath : targetPath === this.#folderPath || FileSystem.isSubPath(this.#folderPath, targetPath);
 	}
 
 	/**
@@ -148,8 +235,8 @@ export class FileSystemEventManager {
 	 * @param regulars Regular target paths captured for this batch
 	 * @returns A Promise that resolves when the lock is acquired
 	 */
-	private async getLock(initials: Event[], regulars: Set<Path>): Promise<void> {
-		const includeInitials = !this.options.ignoreInitial && initials.length > 0;
+	async #getLock(initials: Event[], regulars: Set<Path>): Promise<void> {
+		const includeInitials = !this.#options.ignoreInitial && initials.length > 0;
 
 		if (!includeInitials && regulars.size === 0) { return }
 
@@ -158,90 +245,88 @@ export class FileSystemEventManager {
 
 			if (singleTargetPath === undefined) { return }
 
-			const singleEvents = await this.fileSystemPoller.update(singleTargetPath);
+			const singleEvents = await this.#fileSystemPoller.update(singleTargetPath, this.#liveStatOptions);
 
 			if (singleEvents.length === 0) { return }
 
-			this.onTargetEvents(singleEvents.map<Event>((event) => [ event, singleTargetPath ]));
+			this.#onTargetEvents(singleEvents.map<Event>(({ type, stats }) => [ type, singleTargetPath, stats ]));
 
 			return;
 		}
 
-		const regularEvents = await this.populateEvents(regulars);
+		const regularEvents = await this.#populateEvents(regulars);
 		const allEvents = includeInitials ? [ ...initials, ...regularEvents ] : regularEvents;
 
 		if (allEvents.length === 0) { return }
 
-		this.onTargetEvents(this.deduplicateEvents(allEvents));
+		this.#onTargetEvents(this.#deduplicateEvents(allEvents));
 	}
 
 	/**
 	 * Flushes the current event batch.
 	 * Batch through a microtask so events observed in the same turn settle together.
 	 */
-	private flush() {
-		if (this.flushQueued) { return }
+	#flush() {
+		if (this.#flushQueued) { return }
 
-		this.flushQueued = true;
+		this.#flushQueued = true;
 		queueMicrotask(() => {
-			this.flushQueued = false;
-			this.flushImmediate();
+			this.#flushQueued = false;
+			this.#flushImmediate();
 		});
 	}
 
 	/**
 	 * Flushes the current event batch immediately.
 	 */
-	private flushImmediate() {
-		if (this.watchr.isClosed()) { return }
+	#flushImmediate() {
+		if (this.#watchr.isClosed()) { return }
 
-		const initials = this.initials.splice(0);
-		const regulars = new Set(this.regulars);
-		this.regulars.clear();
-		this.lock = this.getLock(initials, regulars);
+		const initials = this.#initials.splice(0);
+		const regulars = new Set(this.#regulars);
+		this.#regulars.clear();
+		this.#lock = this.#getLock(initials, regulars);
 	}
 
 	/**
 	 * Generates a Node event handler
 	 * @returns A NodeEventHandler
 	 */
-	private generateNodeEventHandler() {
+	#generateNodeEventHandler() {
 		return async (_event: NodeTargetEvent, targetPath: Path = '', isInitial: boolean = false): Promise<void> => {
 			if (isInitial) {
 				// Poll immediately
-				await this.populateEvents([ targetPath ], this.initials);
-				this.batchRevision++;
+				await this.#populateEvents([ targetPath ], this.#initials, this.#initialSymlinks?.has(targetPath) === true ? this.#initialSymlinkStatOptions : this.#initialStatOptions);
 			} else {
 				// Poll later
-				this.regulars.add(targetPath);
-				this.batchRevision++;
+				this.#regulars.add(targetPath);
 			}
 
-			this.scheduleFlushAfterLock();
+			this.#scheduleFlushAfterLock();
 		};
 	}
 
 	/**
 	 * Schedules a single flush once the current lock chain settles.
 	 */
-	private scheduleFlushAfterLock(): void {
-		if (this.flushAfterLockScheduled) { return }
+	#scheduleFlushAfterLock(): void {
+		if (this.#flushAfterLockScheduled) { return }
 
-		this.flushAfterLockScheduled = true;
+		this.#flushAfterLockScheduled = true;
 
-		void this.lock.then(() => this.onFlushAfterLock()).catch((error) => {
-			this.flushAfterLockScheduled = false;
-			this.watchr.error(error);
-			void this.flush();
+		void this.#lock.then(() => this.#onFlushAfterLock()).catch((error) => {
+			this.#flushAfterLockScheduled = false;
+			this.#hooks.reportError(error);
+			void this.#flush();
 		});
 	}
 
 	/**
 	 * Runs when the current lock chain resolves.
 	 */
-	private onFlushAfterLock(): void {
-		this.flushAfterLockScheduled = false;
-		void this.flush();
+	#onFlushAfterLock(): void {
+		this.#flushAfterLockScheduled = false;
+		void this.#flush();
 	}
 
 	/**
@@ -249,7 +334,7 @@ export class FileSystemEventManager {
 	 * @param events The events to deduplicate
 	 * @returns The deduplicated events
 	 */
-	private deduplicateEvents(events: Event[]) {
+	#deduplicateEvents(events: Event[]) {
 		if (events.length < 2) { return events }
 
 		const uniqueEvents: Event[] = [];
@@ -267,14 +352,14 @@ export class FileSystemEventManager {
 			}
 
 			const previousEvent = uniqueEvents[existingIndex]!;
-			if (FileSystemEventManager.isReplacementTransition(previousEvent[0], targetEvent)) {
+			if (FileSystemEventManager.#isReplacementTransition(previousEvent[0], targetEvent)) {
 				eventIndexes.set(targetPath, uniqueEvents.length);
 				uniqueEvents.push(event);
 				continue;
 			}
 
-			const previousPriority = FileSystemEventManager.eventPriorities.get(previousEvent[0]) ?? 0;
-			const currentPriority = FileSystemEventManager.eventPriorities.get(targetEvent) ?? 0;
+			const previousPriority = FileSystemEventManager.#eventPriorities.get(previousEvent[0]) ?? 0;
+			const currentPriority = FileSystemEventManager.#eventPriorities.get(targetEvent) ?? 0;
 
 			if (currentPriority > previousPriority) {
 				uniqueEvents[existingIndex] = event;
@@ -290,7 +375,7 @@ export class FileSystemEventManager {
 	 * @param currentEvent The following event for the path
 	 * @returns True when both events must be preserved
 	 */
-	private static isReplacementTransition(previousEvent: FileSystemEvent, currentEvent: FileSystemEvent): boolean {
+	static #isReplacementTransition(previousEvent: FileSystemEvent, currentEvent: FileSystemEvent): boolean {
 		return (previousEvent === FileSystemEvent.UNLINK && currentEvent === FileSystemEvent.ADD_DIR)
 			|| (previousEvent === FileSystemEvent.UNLINK_DIR && currentEvent === FileSystemEvent.ADD);
 	}
@@ -299,14 +384,15 @@ export class FileSystemEventManager {
 	 * Populates events for the given target paths
 	 * @param targetPaths The target paths to populate events for
 	 * @param events The events to populate
+	 * @param statOptions Stat cancellation/timeout options; defaults to the live-poll options
 	 * @returns The populated events
 	 */
-	private async populateEvents(targetPaths: Iterable<Path>, events: Event[] = []) {
+	async #populateEvents(targetPaths: Iterable<Path>, events: Event[] = [], statOptions: StateUpdateOptions = this.#liveStatOptions) {
 		const paths = Array.from(targetPaths, (targetPath): Path => targetPath);
 
 		await Promise.all(paths.map(async (targetPath) => {
-			for (const event of await this.fileSystemPoller.update(targetPath)) {
-				events.push([ event, targetPath ]);
+			for (const { type, stats } of await this.#fileSystemPoller.update(targetPath, statOptions)) {
+				events.push([ type, targetPath, stats ]);
 			}
 		}));
 
@@ -317,7 +403,7 @@ export class FileSystemEventManager {
 	 * Handles the given target events
 	 * @param events The target events to handle
 	 */
-	private onTargetEvents(events: Event[]) {
+	#onTargetEvents(events: Event[]) {
 		// Same-path stat transitions (e.g. atomic-save inode swaps) already resolve as a single CHANGE;
 		// exclude those paths from rename-sibling correlation so a co-batched temp-file unlink/add doesn't
 		// also emit a redundant RENAME for the same target. Collect the full set first, then process the
@@ -328,19 +414,19 @@ export class FileSystemEventManager {
 			if (targetEvent === FileSystemEvent.CHANGE) { changedPaths.add(targetPath) }
 		}
 
-		for (const [ targetEvent, targetPath ] of events) {
-			if (targetEvent === FileSystemEvent.UNLINK && this.filePath === undefined) {
-				this.watchr.watchersClose(dirname(targetPath), targetPath);
-			} else if (targetEvent === FileSystemEvent.UNLINK_DIR && this.filePath === undefined) {
-				this.watchr.watchersClose(dirname(targetPath), targetPath);
-				this.watchr.watchersClose(targetPath);
+		for (const [ targetEvent, targetPath, stats ] of events) {
+			if (targetEvent === FileSystemEvent.UNLINK && this.#filePath === undefined) {
+				this.#hooks.closeWatchers(dirname(targetPath), targetPath);
+			} else if (targetEvent === FileSystemEvent.UNLINK_DIR && this.#filePath === undefined) {
+				this.#hooks.closeWatchers(dirname(targetPath), targetPath);
+				this.#hooks.closeWatchers(targetPath);
 			}
 
-			if (this.isSubRoot(targetPath)) {
+			if (this.#isSubRoot(targetPath)) {
 				if (targetEvent === FileSystemEvent.CHANGE) {
-					this.watchr.emitEvent(targetEvent, targetPath);
+					this.#hooks.renameHandler.handleChange(targetPath, stats);
 				} else {
-					this.watchr.renameWatchr.getLockTargetEvent(targetEvent, targetPath, this.options.renameTimeout, changedPaths);
+					this.#hooks.renameHandler.getLockTargetEvent(targetEvent, targetPath, stats, this.#options.renameTimeout, changedPaths);
 				}
 			}
 		}
@@ -353,8 +439,8 @@ export class FileSystemEventManager {
 	 * @param isInitial Whether this is an initial event
 	 * @returns A Promise that resolves when the event is handled
 	 */
-	private onWatcherEvent(event: NodeTargetEvent, targetPath?: Path, isInitial: boolean = false) {
-		return this.nodeEventHandler(event, targetPath, isInitial);
+	#onWatcherEvent(event: NodeTargetEvent, targetPath?: Path, isInitial: boolean = false) {
+		return this.#nodeEventHandler(event, targetPath, isInitial);
 	}
 
 	/**
@@ -362,28 +448,34 @@ export class FileSystemEventManager {
 	 * @param event The watcher change event to handle
 	 * @param targetName The target name of the event
 	 */
-	private onWatcherChange(event: NodeTargetEvent = NodeTargetEvent.CHANGE, targetName: string | null = '') {
-		if (this.watchr.isClosed()) { return }
+	#onWatcherChange(event: NodeTargetEvent = NodeTargetEvent.CHANGE, targetName: string | null = '') {
+		if (this.#watchr.isClosed()) { return }
 
-		if (this.filePath !== undefined) {
-			if (this.watchr.isIgnored(this.filePath, this.options.ignore)) { return }
+		if (this.#filePath !== undefined) {
+			if (this.#isIgnored(this.#filePath)) { return }
 
-			void this.onWatcherEvent(event, this.filePath);
+			void this.#onWatcherEvent(event, this.#filePath);
 
 			return;
 		}
 
 		if (targetName !== null && targetName !== '') {
-			const targetPath = resolve(this.folderPath, targetName);
+			const targetPath = resolve(this.#folderPath, targetName);
 
-			if (this.watchr.isIgnored(targetPath, this.options.ignore)) { return }
+			// libuv reports inotify self-events (e.g. IN_DELETE_SELF) using the watched directory's own basename,
+			// so also poll the root itself; if it is unchanged the extra stat derives nothing.
+			if (targetName === basename(this.#folderPath) && !this.#isIgnored(this.#folderPath)) {
+				void this.#onWatcherEvent(event, this.#folderPath);
+			}
 
-			void this.onWatcherEvent(event, targetPath);
+			if (this.#isIgnored(targetPath)) { return }
+
+			void this.#onWatcherEvent(event, targetPath);
 
 			return;
 		}
 
-		void this.onEmptyDirectoryWatcherChange(event);
+		void this.#onEmptyDirectoryWatcherChange(event);
 	}
 
 	/**
@@ -391,61 +483,61 @@ export class FileSystemEventManager {
 	 * First polls tracked paths, then schedules one bounded snapshot scan.
 	 * @param event The watcher change event.
 	 */
-	private onEmptyDirectoryWatcherChange(event: NodeTargetEvent): void {
-		void this.dispatchWatcherEvents(event, this.collectTrackedDirectoryTargets());
+	#onEmptyDirectoryWatcherChange(event: NodeTargetEvent): void {
+		void this.#dispatchWatcherEvents(event, this.#collectTrackedDirectoryTargets());
 
-		this.scheduleDirectoryFallbackScan(event);
+		this.#scheduleDirectoryFallbackScan(event);
 	}
 
 	/**
 	 * Schedules a single fallback directory scan for ambiguous empty-name events.
 	 * @param event The watcher change event.
 	 */
-	private scheduleDirectoryFallbackScan(event: NodeTargetEvent): void {
-		this.directoryFallbackScanQueued = true;
-		this.directoryFallbackScanEvent = this.mergeDirectoryFallbackScanEvent(this.directoryFallbackScanEvent, event);
+	#scheduleDirectoryFallbackScan(event: NodeTargetEvent): void {
+		this.#directoryFallbackScanQueued = true;
+		this.#directoryFallbackScanEvent = this.#mergeDirectoryFallbackScanEvent(this.#directoryFallbackScanEvent, event);
 
-		if (this.directoryFallbackScanScheduled || this.directoryFallbackScanInFlight !== undefined) { return }
+		if (this.#directoryFallbackScanScheduled || this.#directoryFallbackScanInFlight !== undefined) { return }
 
-		const delay = Math.max(0, FileSystemEventManager.directoryFallbackScanIntervalMs - (performance.now() - this.lastDirectoryFallbackScanAt));
-		this.directoryFallbackScanScheduled = true;
+		const delay = Math.max(0, this.#options.fallbackScanInterval - (performance.now() - this.#lastDirectoryFallbackScanAt));
+		this.#directoryFallbackScanScheduled = true;
 
 		if (delay === 0) {
-			queueMicrotask(() => this.startDirectoryFallbackScan());
+			queueMicrotask(() => this.#startDirectoryFallbackScan());
 			return;
 		}
 
-		this.directoryFallbackScanTimer = setTimeout(() => {
-			this.directoryFallbackScanTimer = undefined;
-			this.startDirectoryFallbackScan();
+		this.#directoryFallbackScanTimer = setTimeout(() => {
+			this.#directoryFallbackScanTimer = undefined;
+			this.#startDirectoryFallbackScan();
 		}, delay);
 	}
 
 	/**
 	 * Starts a queued fallback directory scan.
 	 */
-	private startDirectoryFallbackScan(): void {
-		this.directoryFallbackScanScheduled = false;
+	#startDirectoryFallbackScan(): void {
+		this.#directoryFallbackScanScheduled = false;
 
-		if (!this.directoryFallbackScanQueued || this.directoryFallbackScanInFlight !== undefined) { return }
+		if (!this.#directoryFallbackScanQueued || this.#directoryFallbackScanInFlight !== undefined) { return }
 
-		this.directoryFallbackScanQueued = false;
-		this.lastDirectoryFallbackScanAt = performance.now();
+		this.#directoryFallbackScanQueued = false;
+		this.#lastDirectoryFallbackScanAt = performance.now();
 
-		const event = this.directoryFallbackScanEvent ?? NodeTargetEvent.CHANGE;
-		this.directoryFallbackScanEvent = undefined;
+		const event = this.#directoryFallbackScanEvent ?? NodeTargetEvent.CHANGE;
+		this.#directoryFallbackScanEvent = undefined;
 
-		const scanPromise = this.runDirectoryFallbackScan(event).finally(() => {
-			if (this.directoryFallbackScanInFlight !== scanPromise) { return }
+		const scanPromise = this.#runDirectoryFallbackScan(event).finally(() => {
+			if (this.#directoryFallbackScanInFlight !== scanPromise) { return }
 
-			this.directoryFallbackScanInFlight = undefined;
+			this.#directoryFallbackScanInFlight = undefined;
 
-			if (this.directoryFallbackScanQueued) {
-				this.scheduleDirectoryFallbackScan(this.directoryFallbackScanEvent ?? NodeTargetEvent.CHANGE);
+			if (this.#directoryFallbackScanQueued) {
+				this.#scheduleDirectoryFallbackScan(this.#directoryFallbackScanEvent ?? NodeTargetEvent.CHANGE);
 			}
 		});
 
-		this.directoryFallbackScanInFlight = scanPromise;
+		this.#directoryFallbackScanInFlight = scanPromise;
 	}
 
 	/**
@@ -454,7 +546,7 @@ export class FileSystemEventManager {
 	 * @param nextEvent The next watcher event.
 	 * @returns The merged watcher event.
 	 */
-	private mergeDirectoryFallbackScanEvent(previousEvent: NodeTargetEvent | undefined, nextEvent: NodeTargetEvent): NodeTargetEvent {
+	#mergeDirectoryFallbackScanEvent(previousEvent: NodeTargetEvent | undefined, nextEvent: NodeTargetEvent): NodeTargetEvent {
 		if (previousEvent === NodeTargetEvent.RENAME || nextEvent === NodeTargetEvent.RENAME) {
 			return NodeTargetEvent.RENAME;
 		}
@@ -466,22 +558,26 @@ export class FileSystemEventManager {
 	 * Executes the fallback snapshot scan for ambiguous empty-name events.
 	 * @param event The watcher change event.
 	 */
-	private async runDirectoryFallbackScan(event: NodeTargetEvent): Promise<void> {
-		if (this.watchr.isClosed()) { return }
+	async #runDirectoryFallbackScan(event: NodeTargetEvent): Promise<void> {
+		if (this.#watchr.isClosed() || this.#abortSignal.aborted) { return }
 
-		await this.dispatchWatcherEvents(event, await this.collectSnapshotDirectoryTargets());
+		const targetPaths = await this.#collectSnapshotDirectoryTargets();
+
+		if (this.#abortSignal.aborted) { return }
+
+		await this.#dispatchWatcherEvents(event, targetPaths);
 	}
 
 	/**
-	 * Dispatches watcher events in bounded concurrent batches to avoid event storms.
+	 * Dispatches watcher events in bounded concurrent batches to avoid event storms; stops once this manager is aborted.
 	 * @param event The watcher event to dispatch.
 	 * @param targetPaths The target paths to dispatch.
 	 */
-	private async dispatchWatcherEvents(event: NodeTargetEvent, targetPaths: Iterable<Path>): Promise<void> {
+	async #dispatchWatcherEvents(event: NodeTargetEvent, targetPaths: Iterable<Path>): Promise<void> {
 		const paths = Array.from(targetPaths, (targetPath): Path => targetPath);
 
-		for (let index = 0; index < paths.length; index += FileSystemEventManager.maxConcurrentWatcherEventDispatches) {
-			await Promise.all(paths.slice(index, index + FileSystemEventManager.maxConcurrentWatcherEventDispatches).map((targetPath) => this.onWatcherEvent(event, targetPath)));
+		for (let index = 0; index < paths.length && !this.#abortSignal.aborted; index += FileSystemEventManager.#maxConcurrentWatcherEventDispatches) {
+			await Promise.all(paths.slice(index, index + FileSystemEventManager.#maxConcurrentWatcherEventDispatches).map((targetPath) => this.#onWatcherEvent(event, targetPath)));
 		}
 	}
 
@@ -489,12 +585,12 @@ export class FileSystemEventManager {
 	 * Collects tracked candidate paths under the watched root.
 	 * @returns Tracked target paths for quick polling.
 	 */
-	private collectTrackedDirectoryTargets(): Path[] {
+	#collectTrackedDirectoryTargets(): Path[] {
 		const targets: Path[] = [];
 
-		for (const trackedTargetPath of this.fileSystemPoller.stats.keys()) {
-			if (!this.isSubRoot(trackedTargetPath)) { continue }
-			if (this.watchr.isIgnored(trackedTargetPath, this.options.ignore)) { continue }
+		for (const trackedTargetPath of this.#fileSystemPoller.stats.keys()) {
+			if (!this.#isSubRoot(trackedTargetPath)) { continue }
+			if (this.#isIgnored(trackedTargetPath)) { continue }
 
 			targets.push(trackedTargetPath);
 		}
@@ -503,18 +599,18 @@ export class FileSystemEventManager {
 	}
 
 	/**
-	 * Collects snapshot candidate paths under the watched root.
+	 * Collects snapshot candidate paths under the watched root; yields nothing once this manager is aborted.
 	 * @returns Snapshot target paths for fallback polling.
 	 */
-	private async collectSnapshotDirectoryTargets(): Promise<Path[]> {
+	async #collectSnapshotDirectoryTargets(): Promise<Path[]> {
 		const targets = new Set<Path>();
 
-		const ignore = (targetPath: Path) => this.watchr.isIgnored(targetPath, this.options.ignore);
-
 		try {
-			const { directories, files } = await FileSystem.readDirectory(this.folderPath, { signal: this.watchr.abortSignal, ignore });
+			const { directories, files } = await FileSystem.readDirectory(this.#folderPath, this.#directoryReadOptions());
 
-			if (!ignore(this.folderPath)) { targets.add(this.folderPath) }
+			if (this.#abortSignal.aborted) { return [] }
+
+			if (!this.#isIgnored(this.#folderPath)) { targets.add(this.#folderPath) }
 			for (const targetPath of directories) { targets.add(targetPath) }
 			for (const targetPath of files) { targets.add(targetPath) }
 		} catch {
@@ -528,8 +624,14 @@ export class FileSystemEventManager {
 	 * Handles the given watcher error event
 	 * @param error The watcher error event to handle
 	 */
-	private handleWatchrError(error: NodeJS.ErrnoException) {
-		this.watchr.error(this.sanitizeWatcherError(error));
+	#handleWatchrError(error: NodeJS.ErrnoException) {
+		// Windows raises EPERM on the handle when a watched directory is deleted or locked; re-poll instead of erroring.
+		if (process.platform === 'win32' && error.code === 'EPERM') {
+			this.#onWatcherChange(NodeTargetEvent.RENAME);
+			return;
+		}
+
+		this.#hooks.reportError(this.#sanitizeWatcherError(error));
 	}
 
 	/**
@@ -537,8 +639,8 @@ export class FileSystemEventManager {
 	 * @param error The original watcher error
 	 * @returns A sanitized error with a stable message and error code
 	 */
-	private sanitizeWatcherError(error: NodeJS.ErrnoException): Error {
-		const message = error.code ? `🚨 Watcher error (${error.code})` : '🚨 Watcher error';
+	#sanitizeWatcherError(error: NodeJS.ErrnoException): Error {
+		const message = error.code ? `Watcher error (${error.code})` : 'Watcher error';
 		const sanitizedError = new Error(message, { cause: error }) as NodeJS.ErrnoException;
 		sanitizedError.code = error.code ?? 'UNKNOWN';
 

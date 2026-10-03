@@ -1,13 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { linkSync, mkdirSync, renameSync, rmSync, writeFileSync, type FSWatcher } from 'node:fs';
+import { linkSync, mkdirSync, renameSync, rmSync, statSync, watchFile, unwatchFile, writeFileSync, type FSWatcher, type Stats } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { FileSystemEvent } from '../src/watchr';
+import { FileSystem } from '../src/file-system';
 import { cleanupTempRoots, closeWatchers, collectEvents, createReadyWatcher, createTempRoot, delay, settle } from './helpers/fs-fixtures';
 
-const { nativeWatchers, scans } = vi.hoisted(() => ({
+const { nativeWatchers, rootStatListeners, scans } = vi.hoisted(() => ({
 	nativeWatchers: new Map<string, FSWatcher>(),
+	rootStatListeners: new Map<string, (current: Stats, previous: Stats) => void>(),
 	scans: { gate: undefined as Promise<void> | undefined, failure: undefined as Error | undefined }
 }));
 
@@ -16,6 +18,10 @@ vi.mock('node:fs', async (importOriginal) => {
 
 	return {
 		...actual,
+		watchFile: vi.fn((target: string, _options: unknown, listener: (current: Stats, previous: Stats) => void) => {
+			rootStatListeners.set(target, listener);
+		}),
+		unwatchFile: vi.fn(),
 		watch: vi.fn((target: string) => {
 			const watcher = new EventEmitter() as FSWatcher;
 			watcher.close = vi.fn(() => { watcher.emit('close') });
@@ -44,10 +50,44 @@ describe('Watchr native notification boundary', () => {
 		closeWatchers();
 		cleanupTempRoots();
 		nativeWatchers.clear();
+		rootStatListeners.clear();
 		scans.gate = undefined;
 		scans.failure = undefined;
 		vi.mocked(readdir).mockClear();
+		vi.mocked(watchFile).mockClear();
+		vi.mocked(unwatchFile).mockClear();
 		vi.restoreAllMocks();
+		vi.unstubAllGlobals();
+	});
+
+	it('detects Windows root deletion through stat polling and releases the polling listener', async () => {
+		vi.stubGlobal('process', { ...process, platform: 'win32' });
+		const root = createTempRoot();
+		const watcher = await createReadyWatcher(root, { ignoreInitial: true, renameTimeout: 0 });
+		const { events } = collectEvents(watcher);
+		expect(watchFile).toHaveBeenCalledWith(root, { interval: 100, persistent: true }, expect.any(Function));
+		const listener = rootStatListeners.get(root)!;
+		const previous = statSync(root);
+		listener(previous, previous);
+		expect(events).toEqual([]);
+		rmSync(root, { recursive: true });
+		listener({ ...previous, nlink: 0 }, previous);
+
+		await vi.waitFor(() => expect(events.find(({ path }) => path === root)?.event).toBe(FileSystemEvent.UNLINK_DIR));
+		expect(nativeWatchers.get(root)!.close).toHaveBeenCalled();
+		expect(unwatchFile).toHaveBeenCalledWith(root, listener);
+		expect(watcher.isClosed()).toBe(false);
+	});
+
+	it('removes Windows root stat polling on close without waiting for deletion', async () => {
+		vi.stubGlobal('process', { ...process, platform: 'win32' });
+		const root = createTempRoot();
+		const watcher = await createReadyWatcher(root, { ignoreInitial: true, persistent: false });
+		expect(watchFile).toHaveBeenCalledWith(root, { interval: 100, persistent: false }, expect.any(Function));
+		const listener = rootStatListeners.get(root)!;
+		watcher.close();
+
+		expect(unwatchFile).toHaveBeenCalledWith(root, listener);
 	});
 
 	it.each([ '', null ])('discovers new files through an unnamed notification (%s)', async (filename) => {
@@ -80,6 +120,27 @@ describe('Watchr native notification boundary', () => {
 		});
 		expect(errors[0]?.message).not.toContain(root);
 		expect(watcher.isClosed()).toBe(false);
+	});
+
+	it.each([ false, true ])('reports a live stat failure immediately and recovers (multi-path=%s)', async (multiple) => {
+		const root = createTempRoot();
+		const file = join(root, 'file.txt');
+		writeFileSync(file, 'original');
+		const watcher = await createReadyWatcher(root, { ignoreInitial: true });
+		const errors: Error[] = [];
+		watcher.on('error', (error) => errors.push(error));
+		const { events } = collectEvents(watcher);
+		const failure = Object.assign(new Error('Stat operation timed out'), { code: 'WATCHR_STAT_TIMEOUT' });
+		vi.spyOn(FileSystem, 'getStats').mockRejectedValueOnce(failure);
+		const native = nativeWatchers.get(root)!;
+		native.emit('change', 'change', 'file.txt');
+		if (multiple) { native.emit('change', 'change', 'other.txt') }
+
+		await vi.waitFor(() => expect(errors).toEqual([ failure ]));
+		expect(watcher.isClosed()).toBe(false);
+		writeFileSync(file, 'recovered contents');
+		native.emit('change', 'change', 'file.txt');
+		await vi.waitFor(() => expect(events.find(({ path }) => path === file)).toMatchObject({ event: FileSystemEvent.CHANGE, stats: { size: 18 } }));
 	});
 
 	it('preserves file-to-directory replacement events in a multi-path batch', async () => {

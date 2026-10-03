@@ -282,6 +282,7 @@ export class FileRenameHandler {
 	 * @returns void
 	 */
 	#unlinkLock({ inodeNumber, targetPath, stats, lockEvent, fileSystemLocker }: LockConfig, timeout: number = renameTimeout, changedPaths?: ReadonlySet<Path>) {
+		this.#announcedTargets.delete(targetPath);
 		const cancelPendingAdd = this.#pendingAdds.get(targetPath);
 
 		// The path was never announced (its ADD is still held), so the pair is a transient file: drop both silently.

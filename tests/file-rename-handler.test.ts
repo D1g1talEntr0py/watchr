@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { linkSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { FileRenameHandler } from '../src/file-rename-handler';
 import { LockResolver } from '../src/lock-resolver';
@@ -111,6 +111,31 @@ describe('FileRenameHandler', () => {
 		await batch(handler, [ from ], 50);
 
 		expect(emitted).toEqual([[ FileSystemEvent.RENAME, from, to ]]);
+	});
+
+	it('emits add for a deleted rename destination recreated with the same inode', async () => {
+		const { handler, emitted } = createHandler();
+		const root = createTempRoot('watchr-rename-recreated-');
+		const from = join(root, 'source.txt');
+		const to = join(root, 'target.txt');
+		const saved = join(createTempRoot('watchr-rename-saved-'), 'saved.txt');
+		writeFileSync(from, 'original');
+		linkSync(from, saved);
+		await batch(handler, [ from ], 0);
+		emitted.length = 0;
+		renameSync(from, to);
+		await batch(handler, [ to ], 0);
+		await handler.fileStateManager.update(from);
+		rmSync(to);
+		await batch(handler, [ to ], 0);
+		linkSync(saved, to);
+		await batch(handler, [ to ], 0);
+
+		expect(emitted).toEqual([
+			[ FileSystemEvent.RENAME, from, to ],
+			[ FileSystemEvent.UNLINK, to ],
+			[ FileSystemEvent.ADD, to ]
+		]);
 	});
 
 	it('emits addDir immediately for a new directory', async () => {

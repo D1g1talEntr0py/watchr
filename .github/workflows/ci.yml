@@ -39,9 +39,12 @@ jobs:
         continue-on-error: true
       - run: pnpm lint
       - run: pnpm type-check
-      - run: pnpm test:coverage
       - run: pnpm build
       - run: pnpm type-check:dist
+      - run: pnpm test:coverage --exclude tests/memory.test.ts
+      - name: Check retained heap without coverage instrumentation
+        if: runner.os == 'Linux'
+        run: pnpm vitest run tests/memory.test.ts
       - name: Upload coverage to Codecov
         if: matrix.node-version == 26
         uses: codecov/codecov-action@v7

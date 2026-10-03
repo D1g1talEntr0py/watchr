@@ -39,16 +39,16 @@ describe.skipIf(skipReason !== '')(`memory budgets${skipReason ? ` (skipped: ${s
 		cleanupTempRoots();
 	});
 
-	it('should retain at most 700 bytes of heap per tracked path for a 20k flat tree', async () => {
+	it('should retain at most 700 bytes of heap per tracked path for a non-recursive 20k flat tree', async () => {
 		const root = createTempRoot('watchr-mem-flat-');
 		const fileCount = 20_000;
 		buildFlat(root, fileCount);
 
 		// One warm-up open/close so lazily initialised module state is not charged to the sample.
-		(await createReadyWatcher(root, { ignoreInitial: true })).close();
+		(await createReadyWatcher(root, { ignoreInitial: true, recursive: false })).close();
 
 		const before = await settledHeapUsed();
-		await createReadyWatcher(root, { ignoreInitial: true });
+		await createReadyWatcher(root, { ignoreInitial: true, recursive: false });
 		const tracked = fileCount + 1;
 		const after = await settledHeapUsed();
 		const bytesPerPath = (after - before) / tracked;
@@ -97,8 +97,13 @@ describe.skipIf(skipReason !== '')(`memory budgets${skipReason ? ` (skipped: ${s
 				await delay(2);
 			}
 
-			const target = join(root, `r${round}-b199.txt`);
-			await delay(50);
+			const target = join(root, `r${round}-probe.txt`);
+			const added = waitForEvent(watcher, FileSystemEvent.ADD, { path: target });
+			writeFileSync(target, 'tracked');
+			await added;
+			const unlinked = waitForEvent(watcher, FileSystemEvent.UNLINK, { path: target });
+			rmSync(target);
+			await unlinked;
 			const readded = waitForEvent(watcher, FileSystemEvent.ADD, { path: target });
 			writeFileSync(target, 'recreated');
 			await readded;

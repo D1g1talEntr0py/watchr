@@ -1,5 +1,5 @@
 import { basename, dirname, resolve } from 'node:path';
-import type { FSWatcher } from 'node:fs';
+import { watchFile, unwatchFile, type FSWatcher, type Stats } from 'node:fs';
 import { FileSystem } from './file-system';
 import { NodeWatcherEvent, NodeTargetEvent, FileSystemEvent } from './constants';
 import type { Watchr } from './watchr';
@@ -52,6 +52,8 @@ export class FileSystemEventManager {
 	/** Symlink entries of the in-progress initial scan; undefined outside the scan. */
 	readonly #watcherChangeHandler: (event?: NodeTargetEvent, targetName?: string | null) => void;
 	readonly #watcherErrorHandler: (error: NodeJS.ErrnoException) => void;
+	/** Windows needs stat polling to detect deletion of the watched directory itself. */
+	#rootStatListener: ((current: Stats, previous: Stats) => void) | undefined;
 	static readonly #maxConcurrentWatcherEventDispatches = 32;
 	/** Longest the initial scan may block the event loop before yielding. */
 	static readonly #initialScanSliceMs = 8;
@@ -143,6 +145,16 @@ export class FileSystemEventManager {
 			}
 		}
 
+		if (process.platform === 'win32' && this.#filePath === undefined && !this.#abortSignal.aborted) {
+			this.#rootStatListener = (current: Stats, _previous: Stats): void => {
+				if (current.nlink !== 0 || this.#watchr.isClosed()) { return }
+
+				this.#watcher.close();
+				this.#onWatcherChange(NodeTargetEvent.RENAME);
+			};
+			watchFile(this.#folderPath, { interval: 100, persistent: this.#options.persistent ?? true }, this.#rootStatListener);
+		}
+
 		return this;
 	}
 
@@ -206,6 +218,11 @@ export class FileSystemEventManager {
 	 */
 	cleanup(): void {
 		this.#abortController.abort();
+
+		if (this.#rootStatListener !== undefined) {
+			unwatchFile(this.#folderPath, this.#rootStatListener);
+			this.#rootStatListener = undefined;
+		}
 
 		if (this.#directoryFallbackScanTimer !== undefined) {
 			clearTimeout(this.#directoryFallbackScanTimer);
@@ -285,7 +302,9 @@ export class FileSystemEventManager {
 		const initials = this.#initials.splice(0);
 		const regulars = new Set(this.#regulars);
 		this.#regulars.clear();
-		this.#lock = this.#getLock(initials, regulars);
+		this.#lock = this.#getLock(initials, regulars).catch((error: unknown) => {
+			this.#hooks.reportError(error);
+		});
 	}
 
 	/**

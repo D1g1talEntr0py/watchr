@@ -3,7 +3,7 @@ import jsdoc from 'eslint-plugin-jsdoc';
 import tslint from 'typescript-eslint';
 import { defineConfig } from 'eslint/config';
 
-export default defineConfig({ ignores: [ 'node_modules/**', 'dist/**', '*.config.ts', 'scripts/**', 'src/@types', 'tests/coverage/**' ] }, {
+export default defineConfig({ ignores: [ 'node_modules/**', 'dist/**', '*.config.ts', 'scripts/**', 'src/@types', 'tests/coverage/**', 'tests/dist-smoke/**' ] }, {
 	extends: [
 		eslint.configs.recommended,
 		jsdoc.configs['flat/recommended-typescript'],

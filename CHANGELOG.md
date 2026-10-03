@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.1](https://github.com/D1g1talEntr0py/watchr/compare/v3.5.0...v3.5.1) - 2026-10-03
+
+
+
+
+### Bug Fixes
+* **core:** handle watcher failures across platforms ([76da694](https://github.com/D1g1talEntr0py/watchr/commit/76da694879c47ae0d4af4f27527b2da26cdd241d))
+
+### Bug Fixes
+* **core:** watch file parents recursively on macOS ([1965157](https://github.com/D1g1talEntr0py/watchr/commit/1965157167c2fe6f0f32ec7bb3ef7988d39df7e2))
+
+
+
+
+
+
+
+
+### Tests
+* **memory:** preserve probe inodes during churn ([111f100](https://github.com/D1g1talEntr0py/watchr/commit/111f100b41a8ba3bf60ed04a8ae2100613f9cc0c))
+
+
+
+
+
 ## [3.5.0](https://github.com/D1g1talEntr0py/watchr/compare/v3.4.0...v3.5.0) - 2026-10-03
 
 
@@ -44,6 +69,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Chores
 * **ci:** skip dist smoke fixture during lint ([622ce39](https://github.com/D1g1talEntr0py/watchr/commit/622ce398c1513e4a017714219dc6900c366c6b58))
+
+### Chores
+* **release:** 3.5.0 [skip ci] ([ad39a13](https://github.com/D1g1talEntr0py/watchr/commit/ad39a13b8b8c49be18f8c03913cdb6a7a04dfc9f))
 
 
 

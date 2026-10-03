@@ -59,6 +59,7 @@ describe('Watchr native notification boundary', () => {
 		vi.mocked(unwatchFile).mockClear();
 		vi.restoreAllMocks();
 		vi.unstubAllGlobals();
+		vi.useRealTimers();
 	});
 
 	it('detects Windows root deletion through stat polling and releases the polling listener', async () => {
@@ -89,6 +90,35 @@ describe('Watchr native notification boundary', () => {
 		watcher.close();
 
 		expect(unwatchFile).toHaveBeenCalledWith(root, listener);
+	});
+
+	it.each([ false, true ])('recovers a missed macOS file notification through stat polling (ignoreInitial=%s)', async (ignoreInitial) => {
+		vi.stubGlobal('process', { ...process, platform: 'darwin' });
+		vi.useFakeTimers({ toFake: [ 'setInterval', 'clearInterval' ] });
+		const root = createTempRoot();
+		const file = join(root, 'watched.txt');
+		writeFileSync(file, 'original');
+		const watcher = await createReadyWatcher(file, { ignoreInitial, persistent: false });
+		const { events } = collectEvents(watcher);
+		if (!ignoreInitial) {
+			await vi.waitFor(() => expect(events[0]).toMatchObject({ event: FileSystemEvent.ADD, path: file }));
+			events.length = 0;
+		}
+		expect(vi.getTimerCount()).toBe(1);
+		writeFileSync(file, 'missed native notification');
+		await vi.advanceTimersByTimeAsync(100);
+
+		await vi.waitFor(() => expect(events).toHaveLength(1));
+		expect(events[0]).toMatchObject({ event: FileSystemEvent.CHANGE, path: file, stats: { size: 26 } });
+		nativeWatchers.get(root)!.emit('change', 'change', 'watched.txt');
+		await settle();
+		expect(events).toHaveLength(1);
+		watcher.close();
+		expect(vi.getTimerCount()).toBe(0);
+		writeFileSync(file, 'after close');
+		await vi.advanceTimersByTimeAsync(500);
+		await settle();
+		expect(events).toHaveLength(1);
 	});
 
 	it.each([ 'linux', 'darwin' ])('selects the native parent watcher mode for a file on %s and filters siblings', async (platform) => {

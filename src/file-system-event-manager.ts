@@ -54,6 +54,8 @@ export class FileSystemEventManager {
 	readonly #watcherErrorHandler: (error: NodeJS.ErrnoException) => void;
 	/** Windows needs stat polling to detect deletion of the watched directory itself. */
 	#rootStatListener: ((current: Stats, previous: Stats) => void) | undefined;
+	/** macOS file targets need a fallback for changes missed during native watcher startup. */
+	#fileStatPollTimer: ReturnType<typeof setInterval> | undefined;
 	static readonly #maxConcurrentWatcherEventDispatches = 32;
 	/** Longest the initial scan may block the event loop before yielding. */
 	static readonly #initialScanSliceMs = 8;
@@ -155,6 +157,15 @@ export class FileSystemEventManager {
 			watchFile(this.#folderPath, { interval: 100, persistent: this.#options.persistent ?? true }, this.#rootStatListener);
 		}
 
+		if (process.platform === 'darwin' && this.#filePath !== undefined && !this.#abortSignal.aborted) {
+			this.#fileStatPollTimer = setInterval(() => {
+				if (this.#abortSignal.aborted) { return }
+
+				this.#onWatcherChange(NodeTargetEvent.CHANGE);
+			}, 100);
+			if (this.#options.persistent === false) { this.#fileStatPollTimer.unref() }
+		}
+
 		return this;
 	}
 
@@ -222,6 +233,11 @@ export class FileSystemEventManager {
 		if (this.#rootStatListener !== undefined) {
 			unwatchFile(this.#folderPath, this.#rootStatListener);
 			this.#rootStatListener = undefined;
+		}
+
+		if (this.#fileStatPollTimer !== undefined) {
+			clearInterval(this.#fileStatPollTimer);
+			this.#fileStatPollTimer = undefined;
 		}
 
 		if (this.#directoryFallbackScanTimer !== undefined) {

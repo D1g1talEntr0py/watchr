@@ -4,6 +4,7 @@
 		"noEmit": true,
 		"isolatedDeclarations": false,
 		"allowImportingTsExtensions": true,
+		"skipLibCheck": true,
 		"rootDir": "."
 	},
 	"include": [

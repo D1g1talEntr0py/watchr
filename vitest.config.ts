@@ -1,39 +1,25 @@
-import { defineConfig, type Plugin } from 'vitest/config';
+import { defineConfig } from 'vitest/config';
 import { fileURLToPath, URL } from 'node:url';
-import { transform, type TransformResult } from 'esbuild';
-
-// Custom esbuild plugin to handle TypeScript decorators in Vitest since the default transformer (OXC) does not support them.
-function esbuildDecorators(): Plugin {
-  return {
-    name: 'esbuild-decorators',
-    enforce: 'pre',
-    async transform(code, id): Promise<TransformResult | undefined> {
-      if (!id.endsWith('.ts') || !code.includes('@')) { return }
-
-      ({ code } = await transform(code, { loader: 'ts', target: 'es2024', sourcefile: id }));
-
-      return { code, map: '', warnings: [], mangleCache: {}, legalComments: 'none' };
-    }
-  };
-}
 
 export default defineConfig({
-	plugins: [ esbuildDecorators() ],
 	resolve: {
 		alias: [ { find: '@/', replacement: fileURLToPath(new URL('./', import.meta.url)) } ]
 	},
 	test: {
 		environment: 'node',
 		globals: false,
-		pool: 'threads',
+		// `forks` (child processes) accept V8 flags; worker threads reject --expose-gc with ERR_WORKER_INVALID_EXEC_ARGV.
+		pool: 'forks',
+		execArgv: [ '--expose-gc' ],
 		fsModuleCache: true,
 		testTimeout: 10000,
-		typecheck: { enabled: false },
+		typecheck: { enabled: true, include: [ 'tests/**/*.test-d.ts' ], tsconfig: './tests/tsconfig.json' },
     coverage: {
       reporter: [ 'text', 'json' ],
 			reportsDirectory: 'tests/coverage',
       include: [ 'src/**/*.ts' ],
-			exclude: [ 'src/index.ts', 'src/@types' ]
+			exclude: [ 'src/index.ts', 'src/@types', 'tests/**' ],
+			thresholds: { lines: 85, branches: 70, functions: 80, statements: 85 }
 		}
 	}
 });

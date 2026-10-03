@@ -47,8 +47,10 @@
   "scripts": {
     "build": "node esbuild.config.ts",
     "build:watch": "tsc --watch --emitDeclarationOnly",
-    "type-check": "tsc --noEmit",
-    "lint": "eslint --flag unstable_native_nodejs_ts_config ./src",
+    "type-check": "tsc --noEmit && tsc --noEmit -p tests/tsconfig.json",
+    "type-check:tests": "tsc --noEmit -p tests/tsconfig.json",
+    "type-check:dist": "tsc -p tests/dist-smoke/tsconfig.json",
+    "lint": "eslint --flag unstable_native_nodejs_ts_config ./src ./tests",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",

@@ -3,7 +3,9 @@
 	"compilerOptions": {
 		"noEmit": true,
 		"isolatedDeclarations": false,
+		"skipLibCheck": true,
 		"rootDir": ".."
 	},
-	"include": [ "./**/*.ts" ]
+	"include": [ "./**/*.ts" ],
+	"exclude": [ "./benchmarks", "./coverage", "./dist-smoke" ]
 }

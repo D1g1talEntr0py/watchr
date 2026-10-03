@@ -1,9 +1,9 @@
 import eslint from '@eslint/js';
-import { defineConfig } from 'eslint/config';
 import jsdoc from 'eslint-plugin-jsdoc';
 import tslint from 'typescript-eslint';
+import { defineConfig } from 'eslint/config';
 
-export default defineConfig({ ignores: [ 'node_modules/**', 'tests/**', 'dist/**', '*.config.ts', 'scripts/**', 'src/@types' ] }, {
+export default defineConfig({ ignores: [ 'node_modules/**', 'dist/**', '*.config.ts', 'scripts/**', 'src/@types', 'tests/coverage/**' ] }, {
 	extends: [
 		eslint.configs.recommended,
 		jsdoc.configs['flat/recommended-typescript'],
@@ -56,7 +56,6 @@ export default defineConfig({ ignores: [ 'node_modules/**', 'tests/**', 'dist/**
 		'@typescript-eslint/unbound-method': 'off',
 		'@typescript-eslint/restrict-template-expressions': 'off',
 		'@typescript-eslint/no-unsafe-enum-comparison': 'off',
-		"@typescript-eslint/method-signature-style": ["error", "property"],
 		'@typescript-eslint/no-unused-vars': ['error', {
 			args: 'all',
 			argsIgnorePattern: '^_',
@@ -66,5 +65,18 @@ export default defineConfig({ ignores: [ 'node_modules/**', 'tests/**', 'dist/**
 			varsIgnorePattern: '^_',
 			ignoreRestSiblings: true
 		}]
+	}
+}, {
+	files: [ 'tests/**/*.ts' ],
+	rules: {
+		'jsdoc/require-jsdoc': 'off',
+		'@typescript-eslint/no-explicit-any': 'off',
+		'@typescript-eslint/no-unsafe-assignment': 'off',
+		'@typescript-eslint/no-unsafe-call': 'off',
+		'@typescript-eslint/no-unsafe-member-access': 'off',
+		'@typescript-eslint/no-unsafe-argument': 'off',
+		'@typescript-eslint/no-unsafe-return': 'off',
+		'@typescript-eslint/no-floating-promises': 'off',
+		'@typescript-eslint/require-await': 'off'
 	}
 });

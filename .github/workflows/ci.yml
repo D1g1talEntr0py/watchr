@@ -13,7 +13,6 @@ jobs:
 
     permissions:
       contents: read
-      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -25,14 +24,24 @@ jobs:
           fetch-depth: 0
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
+        if: matrix.node-version != 26
         with:
           node-version: ${{ matrix.node-version }}
           cache: pnpm
+      - uses: actions/setup-node@v7
+        if: matrix.node-version == 26
+        with:
+          node-version-file: .node-version
+          cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: pnpm audit --prod
+      - run: pnpm outdated
+        continue-on-error: true
       - run: pnpm lint
       - run: pnpm type-check
       - run: pnpm test:coverage
       - run: pnpm build
+      - run: pnpm type-check:dist
       - name: Upload coverage to Codecov
         if: matrix.node-version == 26
         uses: codecov/codecov-action@v7

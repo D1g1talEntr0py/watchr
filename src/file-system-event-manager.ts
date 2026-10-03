@@ -497,6 +497,10 @@ export class FileSystemEventManager {
 		if (targetName !== null && targetName !== '') {
 			const targetPath = resolve(this.#folderPath, targetName);
 
+			if (process.platform === 'darwin' && event === NodeTargetEvent.RENAME) {
+				this.#scheduleDirectoryFallbackScan(event);
+			}
+
 			// libuv reports inotify self-events (e.g. IN_DELETE_SELF) using the watched directory's own basename,
 			// so also poll the root itself; if it is unchanged the extra stat derives nothing.
 			if (targetName === basename(this.#folderPath) && !this.#isIgnored(this.#folderPath)) {

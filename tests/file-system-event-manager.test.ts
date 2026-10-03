@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { linkSync, mkdirSync, renameSync, rmSync, statSync, watch, watchFile, unwatchFile, writeFileSync, type FSWatcher, type Stats } from 'node:fs';
+import { linkSync, mkdirSync, renameSync, rmSync, statSync, symlinkSync, watch, watchFile, unwatchFile, writeFileSync, type FSWatcher, type Stats } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { FileSystemEvent } from '../src/watchr';
@@ -140,6 +140,29 @@ describe('Watchr native notification boundary', () => {
 		native.emit('change', 'change', 'watched.txt');
 		await vi.waitFor(() => expect(events).toHaveLength(1));
 		expect(events[0]).toMatchObject({ event: FileSystemEvent.CHANGE, path: file });
+	});
+
+	it.skipIf(process.platform === 'win32').each([ false, true ])('discovers coalesced macOS additions (named entry is ignored symlink=%s)', async (symlink) => {
+		vi.stubGlobal('process', { ...process, platform: 'darwin' });
+		const root = createTempRoot();
+		const watcher = await createReadyWatcher(root, { ignoreInitial: true, followSymlinks: false, renameTimeout: 0 });
+		const { events } = collectEvents(watcher);
+		const first = join(root, 'first.txt');
+		const second = join(root, 'second.txt');
+		if (symlink) {
+			const outside = join(createTempRoot(), 'target.txt');
+			writeFileSync(outside, 'first');
+			symlinkSync(outside, first);
+		} else {
+			writeFileSync(first, 'first');
+		}
+		writeFileSync(second, 'second');
+		nativeWatchers.get(root)!.emit('change', 'rename', 'first.txt');
+
+		const expectedPaths = symlink ? [ second ] : [ first, second ];
+		await vi.waitFor(() => expect(events.filter(({ event }) => event === FileSystemEvent.ADD).map(({ path }) => path).sort()).toEqual(expectedPaths));
+		await settle();
+		expect(events).toHaveLength(expectedPaths.length);
 	});
 
 	it.each([ '', null ])('discovers new files through an unnamed notification (%s)', async (filename) => {

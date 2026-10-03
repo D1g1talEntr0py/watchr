@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.4](https://github.com/D1g1talEntr0py/watchr/compare/v3.5.3...v3.5.4) - 2026-10-03
+
+
+
+
+### Bug Fixes
+* **core:** implement macOS directory startup reconciliation and related tests ([838ecd5](https://github.com/D1g1talEntr0py/watchr/commit/838ecd5d25985ae9ceffe26e09c6f2ca3269ea4d))
+
+
+
+
+
+
+
+
+### Tests
+* **ci:** enhance delayed rename notification correlation for Linux and macOS ([4dbebd0](https://github.com/D1g1talEntr0py/watchr/commit/4dbebd03575b09be55e05f848768e35a1a04fa83))
+
+
+
+
+
 ## [3.5.3](https://github.com/D1g1talEntr0py/watchr/compare/v3.5.2...v3.5.3) - 2026-10-03
 
 
@@ -17,6 +39,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+### Chores
+* **release:** 3.5.3 [skip ci] ([bf155d7](https://github.com/D1g1talEntr0py/watchr/commit/bf155d79d067149f969165b126de057419f88ba7))
 
 
 

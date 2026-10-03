@@ -300,7 +300,13 @@ describe('Watchr native notification boundary', () => {
 		expect(watcher.isClosed()).toBe(false);
 	});
 
-	it.each([ false, true ])('correlates a delayed source notification with its destination (directory=%s)', async (directory) => {
+	it.each([
+		[ 'linux', false ],
+		[ 'linux', true ],
+		[ 'darwin', false ],
+		[ 'darwin', true ]
+	] as const)('correlates delayed rename notifications on %s (directory=%s)', async (platform, directory) => {
+		vi.stubGlobal('process', { ...process, platform });
 		const root = createTempRoot();
 		const source = join(root, 'source');
 		const target = join(root, 'target');
@@ -313,12 +319,23 @@ describe('Watchr native notification boundary', () => {
 		native.emit('change', 'rename', 'source');
 		native.emit('change', 'rename', 'marker.txt');
 		await vi.waitFor(() => expect(events.some(({ path }) => path === join(root, 'marker.txt'))).toBe(true));
-		expect(events.filter(({ path }) => path === source)).toEqual([]);
-		native.emit('change', 'rename', 'target');
-		await vi.waitFor(() => expect(events.find(({ path }) => path === source)).toMatchObject({
+		const expectedRename = {
 			event: directory ? FileSystemEvent.RENAME_DIR : FileSystemEvent.RENAME,
+			path: source,
 			pathNext: target
-		}));
+		};
+		if (platform === 'linux') {
+			expect(events.filter(({ path }) => path === source)).toEqual([]);
+		} else {
+			await vi.waitFor(() => expect(events.find(({ path }) => path === source)).toMatchObject(expectedRename));
+		}
+		const after = join(root, 'after.txt');
+		writeFileSync(after, 'after');
+		native.emit('change', 'rename', 'target');
+		native.emit('change', 'rename', 'after.txt');
+		await vi.waitFor(() => expect(events.some(({ path }) => path === after)).toBe(true));
+		expect(events.filter(({ path }) => path === source)).toHaveLength(1);
+		expect(events.find(({ path }) => path === source)).toMatchObject(expectedRename);
 		expect(events.filter(({ path }) => path === target)).toEqual([]);
 	});
 

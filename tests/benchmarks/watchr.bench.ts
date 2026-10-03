@@ -1,434 +1,79 @@
 /// <reference types="node" />
+// Micro-benchmarks for watchr's per-event and initial-scan hot paths, built from `src/` on the fly.
+// Usage: node tests/benchmarks/watchr.bench.ts
+// End-to-end latency, readiness and memory against other watchers live in compare.ts.
 
-import { bench, group, run } from 'mitata';
-import { promises as fs } from 'node:fs';
-import { mkdtempSync, rmSync, watch } from 'node:fs';
-import { join } from 'node:path';
+import { build } from 'esbuild';
+import { bench, do_not_optimize, group, run, summary } from 'mitata';
+import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { readdir, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { setTimeout as delay } from 'node:timers/promises';
-import { FileSystemStateManager } from '../../dist/file-system-state-manager.js';
-import { LockResolver } from '../../dist/lock-resolver.js';
-import { WatchrStats } from '../../dist/watchr-stats.js';
-import { Watchr } from '../../dist/watchr.js';
-import { FileSystemEvent, renameTimeout } from '../../dist/constants.js';
-import type { Stats, WatchrOptions } from '../../src/@types/index.js';
+import { join } from 'node:path';
+import { buildFlat } from './helpers.ts';
 
-type WatchrBenchEvent = 'add' | 'change' | 'unlink' | 'rename' | 'renameDir';
-
-const timeoutMs = 5_000;
-const settleBufferMs = 25;
-
-const benchmarkRoot = mkdtempSync(join(tmpdir(), 'watchr-bench-'));
-const testFilesDir = join(benchmarkRoot, 'test-files');
-const unlinkDir = join(benchmarkRoot, 'unlink');
-const renameFileDir = join(benchmarkRoot, 'rename-file');
-const renameDirDir = join(benchmarkRoot, 'rename-dir');
-const nativeCreateDir = join(benchmarkRoot, 'native-create');
-const nativeChangeDir = join(benchmarkRoot, 'native-change');
-const nativeUnlinkDir = join(benchmarkRoot, 'native-unlink');
-
-const benchmarkWatchOptions: WatchrOptions = {
-	ignoreInitial: true,
-	renameTimeout: 0
+type Internals = {
+	FileSystem: typeof import('../../src/file-system.ts').FileSystem,
+	FileSystemStateManager: typeof import('../../src/file-system-state-manager.ts').FileSystemStateManager,
+	Watchr: typeof import('../../src/watchr.ts').Watchr,
+	WatchrStats: typeof import('../../src/watchr-stats.ts').WatchrStats
 };
 
-const renameBenchmarkWatchOptions: WatchrOptions = {
-	ignoreInitial: true,
-	renameTimeout
-};
+// `dist/` exposes only the public API, so bundle the internals straight from source.
+const { outputFiles: [ bundle ] } = await build({
+	stdin: {
+		contents: [ 'file-system', 'file-system-state-manager', 'watchr', 'watchr-stats' ].map((module) => `export * from './src/${module}';`).join('\n'),
+		resolveDir: new URL('../..', import.meta.url).pathname,
+		loader: 'ts'
+	},
+	bundle: true,
+	write: false,
+	format: 'esm',
+	platform: 'node',
+	target: 'esnext'
+});
+const { FileSystem, FileSystemStateManager, Watchr, WatchrStats } = await import(`data:text/javascript;base64,${Buffer.from(bundle!.text).toString('base64')}`) as Internals;
 
-let sequence = 0;
+const root = mkdtempSync(join(tmpdir(), 'watchr-bench-'));
+const target = join(root, 'target.txt');
+const scanRoot = join(root, 'scan');
+const scanFiles = 1_000;
+writeFileSync(target, 'payload');
+mkdirSync(scanRoot);
+buildFlat(scanRoot, scanFiles);
 
-/**
- * Generates a unique filename with the given prefix.
- * @param prefix - The prefix for the filename.
- * @returns A unique filename string.
- */
-function uniqueName(prefix: string): string {
-	sequence += 1;
-	return `${prefix}-${Date.now()}-${sequence}.txt`;
-}
+const nativeStats = statSync(target, { bigint: true });
+const snapshot = WatchrStats.fromStats(nativeStats);
+const sameSnapshot = WatchrStats.fromStats(statSync(target, { bigint: true }));
+const stateManager = new FileSystemStateManager();
+await stateManager.update(target);
 
-/** Event queue for managing asynchronous events. */
-class EventQueue {
-	private pending = 0;
-	private readonly waiters: Array<() => void> = [];
+group('WatchrStats (per event)', () => {
+	bench('WatchrStats.fromStats', () => do_not_optimize(WatchrStats.fromStats(nativeStats)));
+	bench('WatchrStats#equals', () => do_not_optimize(snapshot.equals(sameSnapshot)));
+});
 
-	/** Notifies the next waiter in the queue or increments the pending count if no waiters are present. */
-	notify(): void {
-		const waiter = this.waiters.shift();
-
-		if (waiter === undefined) {
-			this.pending += 1;
-			return;
-		}
-
-		waiter();
-	}
-
-	/**
-	 * Waits for the next event in the queue or times out after the specified duration.
-	 * @param message - The error message for the timeout.
-	 * @param timeout - The timeout duration in milliseconds.
-	 * @returns A promise that resolves when the event occurs or rejects on timeout.
-	 */
-	wait(message: string, timeout = timeoutMs): Promise<void> {
-		if (this.pending > 0) {
-			this.pending -= 1;
-			return Promise.resolve();
-		}
-
-		return new Promise((resolve, reject) => {
-			const onResolve = () => {
-				clearTimeout(timer);
-				resolve();
-			};
-
-			const timer = setTimeout(() => {
-				const index = this.waiters.indexOf(onResolve);
-				if (index >= 0) { this.waiters.splice(index, 1) }
-				reject(new Error(message));
-			}, timeout);
-
-			this.waiters.push(onResolve);
-		});
-	}
-}
-
-/** A wrapper around the native fs.watch API that provides a queue for managing asynchronous events. */
-class NativeEventStream {
-	private readonly watcher;
-	private readonly queue = new EventQueue();
-
-	constructor(path: string) {
-		this.watcher = watch(path, () => this.queue.notify());
-	}
-
-	/**
-	 * Waits for the next event in the queue or times out after the specified duration.
-	 * @param message - The error message for the timeout.
-	 * @returns A promise that resolves when the event occurs or rejects on timeout.
-	 */
-	wait(message: string): Promise<void> {
-		return this.queue.wait(message);
-	}
-
-	/** Closes the native fs.watch watcher. */
-	close(): void {
-		this.watcher.close();
-	}
-}
-
-/** A wrapper around the Watchr class that provides a queue for managing asynchronous events. */
-class WatchrEventStream {
-	private readonly watcher: Watchr;
-	private readonly queue = new EventQueue();
-
-	private constructor(path: string, options: WatchrOptions, event: WatchrBenchEvent) {
-		this.watcher = new Watchr(path, options);
-		this.watcher.on(event, () => this.queue.notify());
-	}
-
-	/**
-	 * Creates a new WatchrEventStream instance and waits for the watcher to be ready.
-	 * @param path - The path to watch.
-	 * @param options - The Watchr options.
-	 * @param event - The event type to listen for.
-	 * @returns A promise that resolves to the WatchrEventStream instance when ready.
-	 */
-	static async create(path: string, options: WatchrOptions, event: WatchrBenchEvent): Promise<WatchrEventStream> {
-		const stream = new WatchrEventStream(path, options, event);
-
-		await stream.watcher.readyLock;
-		await delay((options.renameTimeout ?? 0) + settleBufferMs);
-
-		return stream;
-	}
-
-	/**
-	 * Waits for the next event in the queue or times out after the specified duration.
-	 * @param message - The error message for the timeout.
-	 * @returns A promise that resolves when the event occurs or rejects on timeout.
-	 */
-	wait(message: string): Promise<void> {
-		return this.queue.wait(message);
-	}
-
-	/** Closes the Watchr watcher. */
-	close(): void {
-		this.watcher.close();
-	}
-}
-
-/**
- * Creates a Watchr instance, waits for it to be ready, and executes a callback function with the watcher.
- * Ensures that the watcher is closed after the callback is executed, even if an error occurs.
- * @param target - The path to watch.
- * @param options - The Watchr options.
- * @param callback - The callback function to execute with the watcher.
- * @returns A promise that resolves when the callback has completed and the watcher has been closed.
- */
-async function withWatchr(target: string, options: WatchrOptions, callback: (watcher: Watchr) => Promise<void>): Promise<void> {
-	const watcher = new Watchr(target, options);
-	await watcher.readyLock;
-	await delay((options.renameTimeout ?? 0) + settleBufferMs);
-
-	try {
-		await callback(watcher);
-	} finally {
-		watcher.close();
-	}
-}
-
-/**
- * Waits for a specified number of events of a given type to occur on a Watchr instance, or times out after a specified duration.
- * @param watcher - The Watchr instance to monitor.
- * @param event - The type of event to wait for ('add', 'change', 'unlink', 'rename', or 'renameDir').
- * @param count - The number of events to wait for.
- * @param timeout - The maximum time to wait for the events, in milliseconds (default is 5000 ms).
- * @returns A promise that resolves when the specified number of events have occurred, or rejects if the timeout is reached.
- */
-function waitForWatchrEventCount(watcher: Watchr, event: WatchrBenchEvent, count: number, timeout = timeoutMs): Promise<void> {
-	return new Promise((resolve, reject) => {
-		let seen = 0;
-		const onEvent = () => {
-			seen += 1;
-			if (seen >= count) {
-				clearTimeout(timer);
-				watcher.off(event, onEvent);
-				resolve();
-			}
-		};
-
-		const timer = setTimeout(() => {
-			watcher.off(event, onEvent);
-			reject(new Error(`🚨 benchmark timeout waiting for ${count} '${event}' events`));
-		}, timeout);
-
-		watcher.on(event, onEvent);
-	});
-}
-
-/**
- * Creates a synthetic WatchrStats object with default values for testing purposes.
- * @param inodeNumber - The inode number to assign to the synthetic stats object.
- * @returns A WatchrStats instance with default values.
- */
-function syntheticStats(inodeNumber: number): WatchrStats {
-	return new WatchrStats({
-		isFile: () => true,
-		isDirectory: () => false,
-		isSymbolicLink: () => false,
-		ino: BigInt(inodeNumber),
-		size: 100n,
-		mtimeNs: 0n,
-		ctimeNs: 0n,
-		mtimeMs: 0
-	} as unknown as Stats);
-}
-
-await Promise.all([
-	fs.mkdir(testFilesDir, { recursive: true }),
-	fs.mkdir(unlinkDir, { recursive: true }),
-	fs.mkdir(renameFileDir, { recursive: true }),
-	fs.mkdir(renameDirDir, { recursive: true }),
-	fs.mkdir(nativeCreateDir, { recursive: true }),
-	fs.mkdir(nativeChangeDir, { recursive: true }),
-	fs.mkdir(nativeUnlinkDir, { recursive: true })
-]);
-
-for (let i = 0; i < 50; i++) {
-	await fs.writeFile(join(testFilesDir, `file-${i}.txt`), `content-${i}`);
-}
-
-const steadyNativeCreate = new NativeEventStream(nativeCreateDir);
-const steadyNativeChange = new NativeEventStream(nativeChangeDir);
-const steadyNativeUnlink = new NativeEventStream(nativeUnlinkDir);
-
-const steadyWatchrCreate = await WatchrEventStream.create(testFilesDir, benchmarkWatchOptions, 'add');
-const steadyWatchrChange = await WatchrEventStream.create(testFilesDir, benchmarkWatchOptions, 'change');
-const steadyWatchrUnlink = await WatchrEventStream.create(unlinkDir, benchmarkWatchOptions, 'unlink');
-const steadyWatchrRenameFile = await WatchrEventStream.create(renameFileDir, renameBenchmarkWatchOptions, 'rename');
-const steadyWatchrRenameDir = await WatchrEventStream.create(renameDirDir, renameBenchmarkWatchOptions, 'renameDir');
-
-const nativeChangeTarget = join(nativeChangeDir, 'target.txt');
-await fs.writeFile(nativeChangeTarget, 'seed-native-change');
-
-const watchrChangeTarget = join(testFilesDir, 'watchr-change-target.txt');
-await fs.writeFile(watchrChangeTarget, 'seed-watchr-change');
-
-const watchrRenameFileTargetA = join(renameFileDir, 'file-a.txt');
-const watchrRenameFileTargetB = join(renameFileDir, 'file-b.txt');
-await fs.writeFile(watchrRenameFileTargetA, 'seed-watchr-rename-file');
-
-const watchrRenameDirTargetA = join(renameDirDir, 'dir-a');
-const watchrRenameDirTargetB = join(renameDirDir, 'dir-b');
-await fs.mkdir(watchrRenameDirTargetA, { recursive: true });
-await fs.writeFile(join(watchrRenameDirTargetA, 'seed.txt'), 'seed-watchr-rename-dir');
-
-const trackedInodeCapacity = 5000;
-const lockResolverCount = 5000;
-type InodeUpdater = { updateInode: (p: string, e: FileSystemEvent, s: WatchrStats) => void };
-
-let stateManager: InodeUpdater | undefined;
-let inodeCounter = 0;
-let lockResolverSeeded = false;
-let lockResolver: LockResolver | undefined;
-
-group('Native fs.watch Baseline', () => {
-	bench('native init and close (50 files)', async () => {
-		const watcher = watch(testFilesDir, () => undefined);
-		await delay(0);
-		watcher.close();
-	});
-
-	bench('native single create notification', async () => {
-		const filePath = join(nativeCreateDir, uniqueName('native-add'));
-		const eventPromise = steadyNativeCreate.wait('🚨 benchmark timeout waiting for native create notification');
-
-		await fs.writeFile(filePath, 'payload');
-		await eventPromise;
-	});
-
-	bench('native single change notification', async () => {
-		const eventPromise = steadyNativeChange.wait('🚨 benchmark timeout waiting for native change notification');
-
-		await fs.writeFile(nativeChangeTarget, uniqueName('native-change-payload'));
-		await eventPromise;
-	});
-
-	bench('native single unlink notification', async () => {
-		const filePath = join(nativeUnlinkDir, uniqueName('native-unlink'));
-		await fs.writeFile(filePath, 'seed');
-
-		const eventPromise = steadyNativeUnlink.wait('🚨 benchmark timeout waiting for native unlink notification');
-		await fs.unlink(filePath);
-		await eventPromise;
+summary(() => {
+	group('stat a changed path (per event)', () => {
+		bench('fs.promises.stat (bigint)', () => stat(target, { bigint: true })).baseline();
+		bench('FileSystem.getStats', () => FileSystem.getStats(target, { timeout: 1_000 }));
+		bench('FileSystemStateManager.update', () => stateManager.update(target, { timeout: 1_000 }));
 	});
 });
 
-group('Watchr Baseline Performance', () => {
-	bench('watchr init and close (50 files)', async () => {
-		await withWatchr(testFilesDir, benchmarkWatchOptions, async () => Promise.resolve());
-	});
-
-	bench('watchr single create notification', async () => {
-		const filePath = join(testFilesDir, uniqueName('watchr-add'));
-		const eventPromise = steadyWatchrCreate.wait('🚨 benchmark timeout waiting for watchr add notification');
-
-		await fs.writeFile(filePath, 'payload');
-		await eventPromise;
-	});
-
-	bench('watchr single change notification', async () => {
-		const eventPromise = steadyWatchrChange.wait('🚨 benchmark timeout waiting for watchr change notification');
-
-		await fs.writeFile(watchrChangeTarget, uniqueName('watchr-change-payload'));
-		await eventPromise;
-	});
-
-	bench('watchr single unlink notification', async () => {
-		const filePath = join(unlinkDir, uniqueName('watchr-unlink'));
-		await fs.writeFile(filePath, 'seed');
-
-		const eventPromise = steadyWatchrUnlink.wait('🚨 benchmark timeout waiting for watchr unlink notification');
-		await fs.unlink(filePath);
-		await eventPromise;
-	});
-
-	bench('watchr detect file rename', async () => {
-		const source = await fs.access(watchrRenameFileTargetA).then(() => watchrRenameFileTargetA).catch(() => watchrRenameFileTargetB);
-		const destination = source === watchrRenameFileTargetA ? watchrRenameFileTargetB : watchrRenameFileTargetA;
-
-		const eventPromise = steadyWatchrRenameFile.wait('🚨 benchmark timeout waiting for watchr rename notification');
-		await fs.rename(source, destination);
-		await eventPromise;
-	});
-
-	bench('watchr detect directory rename', async () => {
-		const source = await fs.access(watchrRenameDirTargetA).then(() => watchrRenameDirTargetA).catch(() => watchrRenameDirTargetB);
-		const destination = source === watchrRenameDirTargetA ? watchrRenameDirTargetB : watchrRenameDirTargetA;
-
-		const eventPromise = steadyWatchrRenameDir.wait('🚨 benchmark timeout waiting for watchr renameDir notification');
-		await fs.rename(source, destination);
-		await eventPromise;
-	});
-
-	bench('watchr handle 10 add events', async () => {
-		const batch = Array.from({ length: 10 }, (_, i) => join(testFilesDir, uniqueName(`watchr-bulk-add-${i}`)));
-		await withWatchr(testFilesDir, benchmarkWatchOptions, async (watcher) => {
-			const eventPromise = waitForWatchrEventCount(watcher, 'add', 10);
-			await Promise.all(batch.map((path, i) => fs.writeFile(path, `content-${i}`)));
-			await eventPromise;
+summary(() => {
+	group(`initial scan (${scanFiles} files)`, () => {
+		bench('fs.promises.readdir (recursive)', () => readdir(scanRoot, { recursive: true, withFileTypes: true })).baseline();
+		bench('FileSystem.readDirectory', () => FileSystem.readDirectory(scanRoot));
+		bench('new Watchr() until ready', async () => {
+			const watcher = new Watchr(scanRoot, { ignoreInitial: true });
+			await watcher.readyLock;
+			watcher.close();
 		});
-	});
-
-	bench('watchr rapid change notification (5 writes)', async () => {
-		await withWatchr(testFilesDir, benchmarkWatchOptions, async (watcher) => {
-			const eventPromise = new Promise<void>((resolve, reject) => {
-				const onChange = () => {
-					clearTimeout(timer);
-					watcher.off('change', onChange);
-					resolve();
-				};
-
-				const timer = setTimeout(() => {
-					watcher.off('change', onChange);
-					reject(new Error('🚨 benchmark timeout waiting for watchr rapid change notification'));
-				}, timeoutMs);
-
-				watcher.on('change', onChange);
-			});
-
-			for (let i = 0; i < 5; i++) {
-				await fs.writeFile(watchrChangeTarget, uniqueName(`watchr-rapid-change-${i}`));
-			}
-
-			await eventPromise;
-		});
-	});
-});
-
-group('Hot Path Microbenchmarks', () => {
-	bench('updateInode at capacity (triggers prune)', () => {
-		if (stateManager === undefined) {
-			(FileSystemStateManager as unknown as { maxTrackedEventInodes: number }).maxTrackedEventInodes = trackedInodeCapacity;
-			stateManager = new FileSystemStateManager() as unknown as InodeUpdater;
-
-			for (let i = 0; i < trackedInodeCapacity; i++) {
-				stateManager.updateInode(`/seed-${i}.txt`, FileSystemEvent.ADD, syntheticStats(i));
-			}
-		}
-
-		inodeCounter += 1;
-		stateManager.updateInode(`/hot-${inodeCounter}.txt`, FileSystemEvent.ADD, syntheticStats(inodeCounter));
-	});
-
-	bench(`lock resolver idle tick with ${lockResolverCount} pending`, () => {
-		lockResolver ??= new LockResolver();
-
-		if (!lockResolverSeeded) {
-			lockResolverSeeded = true;
-
-			for (let i = 0; i < lockResolverCount; i++) {
-				lockResolver.add(() => undefined, 60_000);
-			}
-		}
-
-		(lockResolver as unknown as { resolve: () => void }).resolve();
 	});
 });
 
 try {
-	await run({ throw: true });
+	await run();
 } finally {
-	steadyNativeCreate.close();
-	steadyNativeChange.close();
-	steadyNativeUnlink.close();
-	steadyWatchrCreate.close();
-	steadyWatchrChange.close();
-	steadyWatchrUnlink.close();
-	steadyWatchrRenameFile.close();
-	steadyWatchrRenameDir.close();
-	rmSync(benchmarkRoot, { recursive: true, force: true });
+	rmSync(root, { recursive: true, force: true });
 }

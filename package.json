@@ -52,10 +52,10 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
-    "bench": "pnpm build && node tests/benchmarks/watchr.bench.ts",
-    "bench:compare": "pnpm build && node tests/benchmarks/compare.ts",
-    "bench:compare:json": "pnpm build && node tests/benchmarks/compare.ts --format json",
-    "bench:diagnostics": "pnpm build && node --expose-gc tests/benchmarks/diagnostics.bench.ts"
+    "bench": "node tests/benchmarks/watchr.bench.ts",
+    "bench:compare": "pnpm build && node --expose-gc tests/benchmarks/compare.ts",
+    "bench:baseline": "pnpm build && node --expose-gc tests/benchmarks/compare.ts --update-baseline",
+    "bench:ci": "pnpm build && node --expose-gc tests/benchmarks/compare.ts --ci"
   },
   "dependencies": {
     "temporal-polyfill-lite": "^0.4.3"

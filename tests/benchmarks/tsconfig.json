@@ -3,7 +3,9 @@
 	"compilerOptions": {
 		"noEmit": true,
 		"isolatedDeclarations": false,
-		"rootDir": ".."
+		"allowImportingTsExtensions": true,
+		"rootDir": "../.."
 	},
-	"include": [ "./**/*.ts" ]
+	"include": [ "./**/*.ts" ],
+	"exclude": []
 }

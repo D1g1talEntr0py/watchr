@@ -38,3 +38,21 @@ jobs:
         uses: codecov/codecov-action@v7
         with:
           files: tests/coverage/coverage-final.json
+
+  bench:
+    name: Benchmark regression check
+    runs-on: ubuntu-latest
+    # Non-blocking: tests/benchmarks/baseline.json is per-machine; compare.ts downgrades to warnings when the
+    # baseline was recorded elsewhere, and hosted runners are noisy, hence the loose tolerance.
+    continue-on-error: true
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm bench:ci --tolerance 0.5

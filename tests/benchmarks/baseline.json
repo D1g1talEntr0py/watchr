@@ -1,0 +1,340 @@
+{
+  "meta": {
+    "node": "v26.10.0",
+    "platform": "linux 6.18.40.1-microsoft-standard-WSL2 x64",
+    "cpus": "28x AMD Ryzen 9 9950X 16-Core Processor",
+    "date": "2026-10-01T21:06:51.143Z",
+    "versions": {
+      "watchr": "3.4.0 (dist)",
+      "watcher": "2.3.1",
+      "chokidar": "5.0.0",
+      "@parcel/watcher": "2.6.0"
+    },
+    "runs": 3,
+    "ops": 200
+  },
+  "readiness": [
+    {
+      "scenario": "1k files",
+      "files": 1000,
+      "watchers": {
+        "watchr": {
+          "readyMs": 8.770644000000004,
+          "bytesPerPath": 490.3256743256743,
+          "trackedPaths": 1001,
+          "retainedMB": 0.46807861328125,
+          "rssDeltaMB": 0.875,
+          "failures": 0
+        },
+        "watcher": {
+          "readyMs": 28.71229799999992,
+          "bytesPerPath": 429.6263736263736,
+          "trackedPaths": 1001,
+          "retainedMB": 0.41013336181640625,
+          "rssDeltaMB": 3.28125,
+          "failures": 0
+        },
+        "chokidar": {
+          "readyMs": 78.92298000000005,
+          "bytesPerPath": 1823.856143856144,
+          "trackedPaths": 1001,
+          "retainedMB": 1.7411041259765625,
+          "rssDeltaMB": 6.125,
+          "failures": 0
+        },
+        "@parcel/watcher": {
+          "readyMs": 1.570419000000129,
+          "bytesPerPath": null,
+          "trackedPaths": null,
+          "retainedMB": 0.00148773193359375,
+          "rssDeltaMB": 0.21875,
+          "failures": 0
+        },
+        "fs.watch": {
+          "readyMs": 0.9367829999998776,
+          "bytesPerPath": null,
+          "trackedPaths": null,
+          "retainedMB": 0.08556365966796875,
+          "rssDeltaMB": 0,
+          "failures": 0
+        }
+      }
+    },
+    {
+      "scenario": "10k files",
+      "files": 10000,
+      "watchers": {
+        "watchr": {
+          "readyMs": 65.5556939999999,
+          "bytesPerPath": 493.93780621937805,
+          "trackedPaths": 10001,
+          "retainedMB": 4.711029052734375,
+          "rssDeltaMB": 15.5078125,
+          "failures": 0
+        },
+        "watcher": {
+          "readyMs": 153.2418359999997,
+          "bytesPerPath": 432.983901609839,
+          "trackedPaths": 10001,
+          "retainedMB": 4.129669189453125,
+          "rssDeltaMB": 12.31640625,
+          "failures": 0
+        },
+        "chokidar": {
+          "readyMs": 655.5643720000003,
+          "bytesPerPath": 1851.6044395560443,
+          "trackedPaths": 10001,
+          "retainedMB": 17.66004180908203,
+          "rssDeltaMB": 0.8984375,
+          "failures": 0
+        },
+        "@parcel/watcher": {
+          "readyMs": 13.921659000000545,
+          "bytesPerPath": null,
+          "trackedPaths": null,
+          "retainedMB": 0.00148773193359375,
+          "rssDeltaMB": 1.75,
+          "failures": 0
+        },
+        "fs.watch": {
+          "readyMs": 7.9895049999995535,
+          "bytesPerPath": null,
+          "trackedPaths": null,
+          "retainedMB": 0.9286117553710938,
+          "rssDeltaMB": 0.21875,
+          "failures": 0
+        }
+      }
+    },
+    {
+      "scenario": "50k files",
+      "files": 50000,
+      "watchers": {
+        "watchr": {
+          "readyMs": 275.17407300000013,
+          "bytesPerPath": 473.3354932901342,
+          "trackedPaths": 50001,
+          "retainedMB": 22.570846557617188,
+          "rssDeltaMB": 9.97265625,
+          "failures": 0
+        },
+        "watcher": {
+          "readyMs": 750.9957020000002,
+          "bytesPerPath": 361.69708605827884,
+          "trackedPaths": 50001,
+          "retainedMB": 17.247406005859375,
+          "rssDeltaMB": 19.70703125,
+          "failures": 0
+        },
+        "chokidar": {
+          "readyMs": 3082.7706519999992,
+          "bytesPerPath": 2044.3245535089297,
+          "trackedPaths": 50001,
+          "retainedMB": 97.48294067382812,
+          "rssDeltaMB": 5.81640625,
+          "failures": 0
+        },
+        "@parcel/watcher": {
+          "readyMs": 72.6570470000006,
+          "bytesPerPath": null,
+          "trackedPaths": null,
+          "retainedMB": 0.00148773193359375,
+          "rssDeltaMB": 8.96875,
+          "failures": 0
+        },
+        "fs.watch": {
+          "readyMs": 36.17461000000185,
+          "bytesPerPath": null,
+          "trackedPaths": null,
+          "retainedMB": 4.310211181640625,
+          "rssDeltaMB": 1.5,
+          "failures": 0
+        }
+      }
+    },
+    {
+      "scenario": "5k nested",
+      "files": 5000,
+      "watchers": {
+        "watchr": {
+          "readyMs": 90.04829900000186,
+          "bytesPerPath": 547.8681162003207,
+          "trackedPaths": 5611,
+          "retainedMB": 2.9316787719726562,
+          "rssDeltaMB": 0.65625,
+          "failures": 0
+        },
+        "watcher": {
+          "readyMs": 266.3566869999995,
+          "bytesPerPath": 464.87399750490107,
+          "trackedPaths": 5611,
+          "retainedMB": 2.4875717163085938,
+          "rssDeltaMB": 0.65625,
+          "failures": 0
+        },
+        "chokidar": {
+          "readyMs": 479.20024099999864,
+          "bytesPerPath": 1903.5580110497237,
+          "trackedPaths": 5611,
+          "retainedMB": 10.186065673828125,
+          "rssDeltaMB": 0.4375,
+          "failures": 0
+        },
+        "@parcel/watcher": {
+          "readyMs": 10.655408999999054,
+          "bytesPerPath": null,
+          "trackedPaths": null,
+          "retainedMB": 0.00077056884765625,
+          "rssDeltaMB": 0,
+          "failures": 0
+        },
+        "fs.watch": {
+          "readyMs": 9.002959000001283,
+          "bytesPerPath": null,
+          "trackedPaths": null,
+          "retainedMB": 0.9162521362304688,
+          "rssDeltaMB": 0,
+          "failures": 0
+        }
+      }
+    }
+  ],
+  "latency": {
+    "watchr": {
+      "createAdd": {
+        "p50Us": 294.86699999688426,
+        "p95Us": 478.36199999801465,
+        "missed": 0
+      },
+      "writeChange": {
+        "p50Us": 296.7370000005758,
+        "p95Us": 470.7720000005793,
+        "missed": 0
+      }
+    },
+    "watcher": {
+      "createAdd": {
+        "p50Us": 1603155.8090000036,
+        "p95Us": 1603615.8020000001,
+        "missed": 0
+      },
+      "writeChange": {
+        "p50Us": 300709.0270000044,
+        "p95Us": 300827.8000000282,
+        "missed": 0
+      }
+    },
+    "chokidar": {
+      "createAdd": {
+        "p50Us": 30635.80499996897,
+        "p95Us": 43270.35199996317,
+        "missed": 0
+      },
+      "writeChange": {
+        "p50Us": 5882.082999974955,
+        "p95Us": 14800.79000000842,
+        "missed": 0
+      }
+    },
+    "@parcel/watcher": {
+      "createAdd": {
+        "p50Us": 50323.457000020426,
+        "p95Us": 50414.48599996511,
+        "missed": 0
+      },
+      "writeChange": {
+        "p50Us": 50341.26800001832,
+        "p95Us": 50454.18599998811,
+        "missed": 0
+      }
+    },
+    "fs.watch": {
+      "createAdd": {
+        "p50Us": 145.4830000293441,
+        "p95Us": 196.93500001449138,
+        "missed": 0
+      },
+      "writeChange": {
+        "p50Us": 101.73199995188043,
+        "p95Us": 156.41399996820837,
+        "missed": 0
+      }
+    }
+  },
+  "rename": {
+    "watchr": {
+      "correlated": 100,
+      "pairs": 0,
+      "unresolved": 0,
+      "totalEvents": 100
+    },
+    "watcher": {
+      "correlated": 100,
+      "pairs": 0,
+      "unresolved": 0,
+      "totalEvents": 100
+    },
+    "chokidar": {
+      "correlated": 0,
+      "pairs": 100,
+      "unresolved": 0,
+      "totalEvents": 200
+    },
+    "@parcel/watcher": {
+      "correlated": 0,
+      "pairs": 100,
+      "unresolved": 0,
+      "totalEvents": 200
+    },
+    "fs.watch": {
+      "correlated": 0,
+      "pairs": 100,
+      "unresolved": 0,
+      "totalEvents": 200
+    }
+  },
+  "verdict": [
+    {
+      "category": "Startup (50k files)",
+      "winners": [
+        "watchr"
+      ],
+      "value": "275 ms",
+      "margin": "2.7x faster than watcher (751 ms)"
+    },
+    {
+      "category": "Memory (50k files)",
+      "winners": [
+        "watcher"
+      ],
+      "value": "362 B",
+      "margin": "1.3x less than watchr (473 B)"
+    },
+    {
+      "category": "Latency, create→add p50",
+      "winners": [
+        "watchr"
+      ],
+      "value": "0.29 ms",
+      "margin": "103.9x faster than chokidar (30.6 ms)"
+    },
+    {
+      "category": "Latency, write→change p50",
+      "winners": [
+        "watchr"
+      ],
+      "value": "0.30 ms",
+      "margin": "19.8x faster than chokidar (5.88 ms)"
+    },
+    {
+      "category": "Rename detection",
+      "winners": [
+        "watchr",
+        "watcher"
+      ],
+      "value": "100/100",
+      "margin": "next best: chokidar (0/100)"
+    }
+  ],
+  "skipped": []
+}

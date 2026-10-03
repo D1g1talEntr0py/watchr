@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { linkSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Watchr } from '../src/watchr';
 import { FileSystemEvent, WatcherEvent } from '../src/watchr';
@@ -78,11 +78,16 @@ describe.skipIf(skipReason !== '')(`memory budgets${skipReason ? ` (skipped: ${s
 
 	it('should treat a deleted path as a new addition after each churn round', async () => {
 		const root = createTempRoot('watchr-mem-churn-');
+		const probes = createTempRoot('watchr-mem-probes-');
+		for (let round = 0; round < 3; round++) {
+			writeFileSync(join(probes, `r${round}.txt`), 'tracked');
+		}
 		const watcher = await createReadyWatcher(root, { ignoreInitial: true, renameTimeout: 20 });
 		const errors: Error[] = [];
 		watcher.on(WatcherEvent.ERROR, (error: Error) => errors.push(error));
 
 		for (let round = 0; round < 3; round++) {
+			const saved = join(probes, `r${round}.txt`);
 			for (let i = 0; i < 200; i++) {
 				const source = join(root, `r${round}-a${i}.txt`);
 				const target = join(root, `r${round}-b${i}.txt`);
@@ -99,13 +104,13 @@ describe.skipIf(skipReason !== '')(`memory budgets${skipReason ? ` (skipped: ${s
 
 			const target = join(root, `r${round}-probe.txt`);
 			const added = waitForEvent(watcher, FileSystemEvent.ADD, { path: target });
-			writeFileSync(target, 'tracked');
+			linkSync(saved, target);
 			await added;
 			const unlinked = waitForEvent(watcher, FileSystemEvent.UNLINK, { path: target });
 			rmSync(target);
 			await unlinked;
 			const readded = waitForEvent(watcher, FileSystemEvent.ADD, { path: target });
-			writeFileSync(target, 'recreated');
+			linkSync(saved, target);
 			await readded;
 			const removed = waitForEvent(watcher, FileSystemEvent.UNLINK, { path: target });
 			rmSync(target);

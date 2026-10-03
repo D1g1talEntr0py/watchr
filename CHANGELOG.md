@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.3](https://github.com/D1g1talEntr0py/watchr/compare/v3.5.2...v3.5.3) - 2026-10-03
+
+
+
+
+### Bug Fixes
+* **core:** schedule directory fallback scan on macOS rename events ([9ecece7](https://github.com/D1g1talEntr0py/watchr/commit/9ecece761d54349bb598ae80dc501ed9abf2cf23))
+
+
+
+
+
+
+
+
+
+
+
+
 ## [3.5.2](https://github.com/D1g1talEntr0py/watchr/compare/v3.5.1...v3.5.2) - 2026-10-03
 
 
@@ -17,6 +36,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+### Chores
+* **release:** 3.5.2 [skip ci] ([f198dbc](https://github.com/D1g1talEntr0py/watchr/commit/f198dbca7021a7ddaa2785cacc069a37f472ba0d))
 
 
 

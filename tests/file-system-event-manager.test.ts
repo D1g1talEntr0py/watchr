@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { linkSync, mkdirSync, renameSync, rmSync, statSync, watchFile, unwatchFile, writeFileSync, type FSWatcher, type Stats } from 'node:fs';
+import { linkSync, mkdirSync, renameSync, rmSync, statSync, watch, watchFile, unwatchFile, writeFileSync, type FSWatcher, type Stats } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { FileSystemEvent } from '../src/watchr';
@@ -54,6 +54,7 @@ describe('Watchr native notification boundary', () => {
 		scans.gate = undefined;
 		scans.failure = undefined;
 		vi.mocked(readdir).mockClear();
+		vi.mocked(watch).mockClear();
 		vi.mocked(watchFile).mockClear();
 		vi.mocked(unwatchFile).mockClear();
 		vi.restoreAllMocks();
@@ -88,6 +89,27 @@ describe('Watchr native notification boundary', () => {
 		watcher.close();
 
 		expect(unwatchFile).toHaveBeenCalledWith(root, listener);
+	});
+
+	it.each([ 'linux', 'darwin' ])('selects the native parent watcher mode for a file on %s and filters siblings', async (platform) => {
+		vi.stubGlobal('process', { ...process, platform });
+		const root = createTempRoot();
+		const file = join(root, 'watched.txt');
+		const sibling = join(root, 'sibling.txt');
+		writeFileSync(file, 'original');
+		writeFileSync(sibling, 'sibling');
+		const watcher = await createReadyWatcher(file, { ignoreInitial: true });
+		expect(watch).toHaveBeenCalledWith(root, expect.objectContaining({ recursive: platform === 'darwin' }), expect.any(Function));
+		const { events } = collectEvents(watcher);
+		const native = nativeWatchers.get(root)!;
+		writeFileSync(sibling, 'changed sibling');
+		native.emit('change', 'change', 'sibling.txt');
+		await settle();
+		expect(events).toEqual([]);
+		writeFileSync(file, 'changed watched file');
+		native.emit('change', 'change', 'watched.txt');
+		await vi.waitFor(() => expect(events).toHaveLength(1));
+		expect(events[0]).toMatchObject({ event: FileSystemEvent.CHANGE, path: file });
 	});
 
 	it.each([ '', null ])('discovers new files through an unnamed notification (%s)', async (filename) => {
@@ -292,6 +314,7 @@ describe('Watchr native notification boundary', () => {
 		expect(events.filter(({ path }) => path === target)).toEqual([]);
 
 		if (action === 'delete') {
+			linkSync(target, join(createTempRoot(), 'saved-target.txt'));
 			rmSync(target);
 			writeFileSync(join(root, 'deleted-marker.txt'), 'marker');
 			native.emit('change', 'rename', 'target.txt');

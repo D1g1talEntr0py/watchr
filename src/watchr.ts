@@ -526,6 +526,7 @@ class Watchr extends EventEmitter<WatchrEventMap> implements Closable {
 
 	/**
 	 * Watches a file for changes
+	 * Uses recursive parent watching on macOS so FSEvents observes child-content changes rather than only directory changes.
 	 * @param filePath The path of the file to watch
 	 * @param options The options for the watcher
 	 * @param handler The handler to call when changes are detected
@@ -535,7 +536,7 @@ class Watchr extends EventEmitter<WatchrEventMap> implements Closable {
 		if (this.isClosed() || this.isIgnored(filePath, options.ignoreMatcher)) { return }
 
 		const folderPath = dirname(filePath);
-		const fileWatchOptions: NormalizedWatchrOptions = { ...options, recursive: false };
+		const fileWatchOptions: NormalizedWatchrOptions = { ...options, recursive: process.platform === 'darwin' };
 		const watchOptions = this.#toNodeWatchOptions(fileWatchOptions);
 
 		return this.#synchronizeWatchers(async () => {

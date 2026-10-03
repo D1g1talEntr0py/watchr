@@ -8,13 +8,16 @@
 .DS_Store
 .TemporaryItems
 .Trashes
-tsconfig.tsbuildinfo
+*.tgz
 Thumbs.db
 
 dist
+docs/
+!docs/release-process.md
 node_modules
 package-lock.json
 __TREES__
 
 tests/mocked
 tests/coverage
+tests/.tmp

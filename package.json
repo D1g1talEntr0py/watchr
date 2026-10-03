@@ -45,6 +45,7 @@
     "LICENSE"
   ],
   "scripts": {
+    "prepare": "git config core.hooksPath .githooks || true",
     "build": "node esbuild.config.ts",
     "build:watch": "tsc --watch --emitDeclarationOnly",
     "type-check": "tsc --noEmit && tsc --noEmit -p tests/tsconfig.json",

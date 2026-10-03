@@ -1,0 +1,56 @@
+name: Bug report
+description: A watcher emitted the wrong events, missed events, crashed, or leaked.
+labels: [bug]
+body:
+  - type: input
+    id: os
+    attributes:
+      label: OS / kernel
+      description: e.g. `uname -sr` on Linux/macOS, `ver` on Windows. Mention WSL if applicable.
+      placeholder: Linux 6.18.40 (WSL2) / macOS 15.6 / Windows 11 23H2
+    validations:
+      required: true
+  - type: input
+    id: filesystem
+    attributes:
+      label: Filesystem
+      description: The filesystem of the watched path (ext4, APFS, NTFS, 9p/drvfs, NFS, tmpfs, overlayfs in Docker, ...).
+      placeholder: ext4
+    validations:
+      required: true
+  - type: input
+    id: node
+    attributes:
+      label: Node.js version
+      placeholder: v26.10.0
+    validations:
+      required: true
+  - type: input
+    id: watchr
+    attributes:
+      label: watchr version
+      placeholder: 4.0.0
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: Smallest script (plus the file-system operations and their timing) that shows the problem. Include the `WatchrOptions` you pass.
+      render: ts
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected events
+      description: The event sequence you expected, e.g. `add(a) → rename(a→b) → change(b) → unlink(b)`.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual events
+      description: What was emitted (output of an `all` listener), plus any `error` events or `WatchrWarning` output.
+    validations:
+      required: true

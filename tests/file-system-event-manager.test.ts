@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { linkSync, mkdirSync, renameSync, rmSync, statSync, symlinkSync, watch, watchFile, unwatchFile, writeFileSync, type FSWatcher, type Stats } from 'node:fs';
 import { readdir } from 'node:fs/promises';
@@ -46,6 +46,10 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 });
 
 describe('Watchr native notification boundary', () => {
+	beforeEach(() => {
+		vi.stubGlobal('process', { ...process, platform: 'linux' });
+	});
+
 	afterEach(() => {
 		closeWatchers();
 		cleanupTempRoots();
@@ -60,6 +64,49 @@ describe('Watchr native notification boundary', () => {
 		vi.restoreAllMocks();
 		vi.unstubAllGlobals();
 		vi.useRealTimers();
+	});
+
+	it.each([ 1, 2 ])('recovers macOS startup additions across %s roots without notifications and stops reconciling', async (rootCount) => {
+		vi.stubGlobal('process', { ...process, platform: 'darwin' });
+		vi.useFakeTimers({ toFake: [ 'setTimeout', 'clearTimeout' ] });
+		const roots = Array.from({ length: rootCount }, () => createTempRoot());
+		const watcher = await createReadyWatcher(roots, { ignoreInitial: true, persistent: false, renameTimeout: 0 });
+		const { events } = collectEvents(watcher);
+		const first = join(roots[0]!, 'first.txt');
+		const second = join(roots[rootCount - 1]!, 'second.txt');
+		writeFileSync(first, 'first');
+		await vi.advanceTimersByTimeAsync(100);
+		await vi.waitFor(() => expect(events.find(({ path }) => path === first)?.event).toBe(FileSystemEvent.ADD));
+		writeFileSync(second, 'second');
+		await vi.advanceTimersByTimeAsync(250);
+		await vi.waitFor(() => expect(events.find(({ path }) => path === second)?.event).toBe(FileSystemEvent.ADD));
+		await vi.advanceTimersByTimeAsync(500);
+		await vi.advanceTimersByTimeAsync(1000);
+		await vi.waitFor(() => expect(readdir).toHaveBeenCalledTimes(5 * rootCount));
+		await vi.waitFor(() => expect(vi.getTimerCount()).toBe(0));
+		await settle();
+		expect(events).toHaveLength(2);
+		const scansBefore = vi.mocked(readdir).mock.calls.length;
+		await vi.advanceTimersByTimeAsync(5000);
+		expect(readdir).toHaveBeenCalledTimes(scansBefore);
+		watcher.close();
+	});
+
+	it('cancels macOS directory startup reconciliation on close', async () => {
+		vi.stubGlobal('process', { ...process, platform: 'darwin' });
+		vi.useFakeTimers({ toFake: [ 'setTimeout', 'clearTimeout' ] });
+		const root = createTempRoot();
+		const watcher = await createReadyWatcher(root, { ignoreInitial: true, persistent: false });
+		const { events } = collectEvents(watcher);
+		watcher.close();
+		vi.mocked(readdir).mockClear();
+		writeFileSync(join(root, 'after.txt'), 'after close');
+		await vi.advanceTimersByTimeAsync(5000);
+		await settle();
+
+		expect(readdir).not.toHaveBeenCalled();
+		expect(events).toEqual([]);
+		expect(vi.getTimerCount()).toBe(0);
 	});
 
 	it('detects Windows root deletion through stat polling and releases the polling listener', async () => {

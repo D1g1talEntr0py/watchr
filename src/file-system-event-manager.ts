@@ -27,6 +27,8 @@ export class FileSystemEventManager {
 	#directoryFallbackScanTimer: ReturnType<typeof setTimeout> | undefined;
 	#directoryFallbackScanInFlight: Promise<void> | undefined;
 	#directoryFallbackScanEvent: NodeTargetEvent | undefined;
+	/** Bounded macOS startup reconciliation while the native stream becomes active. */
+	#directoryStartupScanTimer: ReturnType<typeof setTimeout> | undefined;
 	#lastDirectoryFallbackScanAt: number;
 	readonly #fileSystemPoller: FileSystemStateManager;
 	readonly #watchr: Watchr;
@@ -56,6 +58,8 @@ export class FileSystemEventManager {
 	#rootStatListener: ((current: Stats, previous: Stats) => void) | undefined;
 	/** macOS file targets need a fallback for changes missed during native watcher startup. */
 	#fileStatPollTimer: ReturnType<typeof setInterval> | undefined;
+	/** Delays between startup snapshots; no periodic directory scanning remains afterward. */
+	static readonly #directoryStartupScanDelays: readonly number[] = [ 100, 250, 500, 1000 ];
 	static readonly #maxConcurrentWatcherEventDispatches = 32;
 	/** Longest the initial scan may block the event loop before yielding. */
 	static readonly #initialScanSliceMs = 8;
@@ -165,6 +169,9 @@ export class FileSystemEventManager {
 			}, 100);
 			if (this.#options.persistent === false) { this.#fileStatPollTimer.unref() }
 		}
+		if (process.platform === 'darwin' && this.#filePath === undefined) {
+			this.#scheduleDirectoryStartupScan();
+		}
 
 		return this;
 	}
@@ -229,6 +236,11 @@ export class FileSystemEventManager {
 	 */
 	cleanup(): void {
 		this.#abortController.abort();
+
+		if (this.#directoryStartupScanTimer !== undefined) {
+			clearTimeout(this.#directoryStartupScanTimer);
+			this.#directoryStartupScanTimer = undefined;
+		}
 
 		if (this.#rootStatListener !== undefined) {
 			unwatchFile(this.#folderPath, this.#rootStatListener);
@@ -526,6 +538,24 @@ export class FileSystemEventManager {
 		void this.#dispatchWatcherEvents(event, this.#collectTrackedDirectoryTargets());
 
 		this.#scheduleDirectoryFallbackScan(event);
+	}
+
+	/**
+	 * Reconciles startup changes missed before the macOS native stream starts delivering events.
+	 * @param attempt Index of the next bounded startup delay.
+	 */
+	#scheduleDirectoryStartupScan(attempt = 0): void {
+		const delay = FileSystemEventManager.#directoryStartupScanDelays[attempt];
+		if (delay === undefined || this.#abortSignal.aborted) { return }
+
+		this.#directoryStartupScanTimer = setTimeout(() => {
+			this.#directoryStartupScanTimer = undefined;
+			if (this.#abortSignal.aborted) { return }
+
+			this.#onEmptyDirectoryWatcherChange(NodeTargetEvent.RENAME);
+			this.#scheduleDirectoryStartupScan(attempt + 1);
+		}, delay);
+		if (this.#options.persistent === false) { this.#directoryStartupScanTimer.unref() }
 	}
 
 	/**

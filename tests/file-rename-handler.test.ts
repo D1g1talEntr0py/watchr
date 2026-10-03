@@ -96,6 +96,23 @@ describe('FileRenameHandler', () => {
 		expect(emitted).toEqual([[ FileSystemEvent.RENAME, from, to ], [ FileSystemEvent.UNLINK, to ]]);
 	});
 
+	it('does not emit a rename twice when destination and source polls arrive separately', async () => {
+		const { handler, emitted } = createHandler();
+		const root = createTempRoot('watchr-rename-handler-');
+		const from = join(root, 'a.txt');
+		const to = join(root, 'b.txt');
+		writeFileSync(from, 'x');
+		await batch(handler, [ from ], 50);
+		emitted.length = 0;
+
+		renameSync(from, to);
+		await batch(handler, [ to ], 50);
+		await delay(0);
+		await batch(handler, [ from ], 50);
+
+		expect(emitted).toEqual([[ FileSystemEvent.RENAME, from, to ]]);
+	});
+
 	it('emits addDir immediately for a new directory', async () => {
 		const { handler, emitted } = createHandler();
 		const dir = join(createTempRoot('watchr-rename-handler-'), 'dir');

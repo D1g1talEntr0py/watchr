@@ -7,11 +7,16 @@ import type { WatchrStats } from './watchr-stats';
 import type { InodeNumber, LockEvent, Path, TargetEventEmitter } from './@types/index';
 
 type LockConfig = {
-	inodeNumber?: InodeNumber;
-	targetPath: Path;
-	stats: WatchrStats;
-	fileSystemLocker: FileSystemLocker;
-	lockEvent: LockEvent;
+	inodeNumber?: InodeNumber,
+	targetPath: Path,
+	stats: WatchrStats,
+	fileSystemLocker: FileSystemLocker,
+	lockEvent: LockEvent
+};
+
+type AnnouncedTarget = {
+	inodeNumber: InodeNumber,
+	expiresAt: number
 };
 
 /**
@@ -28,8 +33,9 @@ export class FileRenameHandler {
 	readonly #canonicalChangedPathsCache: WeakMap<ReadonlySet<Path>, ReadonlySet<Path>>;
 	/** Paths whose ADD is held by a delayed lock and has not been emitted yet, mapped to a silent cancel. */
 	readonly #pendingAdds: Map<Path, () => void>;
-	/** Rename targets announced by an unlink earlier in the current synchronous batch, whose own ADD must be dropped. */
-	readonly #announcedTargets: Map<Path, InodeNumber>;
+	/** Rename destinations already emitted, retained until the counterpart notification arrives or expires. */
+	readonly #announcedTargets: Map<Path, AnnouncedTarget>;
+	static readonly #maxAnnouncedTargets: number = 50000;
 
 	/**
 	 * Creates an instance of FileRenameHandler.
@@ -162,17 +168,15 @@ export class FileRenameHandler {
 	 * @returns void
 	 */
 	#addLock({ inodeNumber, targetPath, stats, lockEvent, fileSystemLocker }: LockConfig, timeout: number = renameTimeout, changedPaths?: ReadonlySet<Path>) {
-		if (inodeNumber !== undefined && this.#announcedTargets.get(targetPath) === inodeNumber) {
-			this.#announcedTargets.delete(targetPath);
-
-			return;
-		}
+		if (inodeNumber !== undefined && this.#consumeAnnouncedTarget(targetPath, inodeNumber)) { return }
 
 		if (inodeNumber !== undefined) {
 			const previousTargetPath = this.#findSiblingPath(inodeNumber, targetPath);
 
 			if (previousTargetPath !== undefined && !this.#hasChangedPath(changedPaths, previousTargetPath)) {
 				this.#emitEvent(lockEvent.rename, previousTargetPath, stats, targetPath);
+				this.#announceTarget(targetPath, inodeNumber, timeout);
+
 				return;
 			}
 		}
@@ -288,9 +292,12 @@ export class FileRenameHandler {
 		const nextTargetPath = this.#findSiblingPath(inodeNumber, targetPath);
 
 		if (nextTargetPath !== undefined && !this.#hasChangedPath(changedPaths, nextTargetPath)) {
+			if (this.#consumeAnnouncedTarget(nextTargetPath, inodeNumber)) { return }
+
 			// Same inode, so the unlinked path's stats are a faithful fallback when the sibling is not tracked yet.
 			this.#emitEvent(lockEvent.rename, targetPath, this.#currentStats(nextTargetPath, stats), nextTargetPath);
-			this.#announceTarget(nextTargetPath, inodeNumber);
+			this.#announceTarget(nextTargetPath, inodeNumber, timeout);
+
 			return;
 		}
 
@@ -340,21 +347,49 @@ export class FileRenameHandler {
 	}
 
 	/**
-	 * Marks a path as already introduced by a rename so its own ADD is not emitted (or held) as well.
-	 * A held ADD is cancelled; one still to come in this synchronous batch is dropped when it arrives.
+	 * Marks a destination whose rename has already been emitted so its counterpart notification is suppressed.
+	 * A pending ADD is cancelled; otherwise the mark lasts until consumed or expired.
 	 * @param targetPath - The rename destination.
 	 * @param inodeNumber - The inode the rename was correlated on.
+	 * @param timeout - The maximum time to retain the announcement.
 	 */
-	#announceTarget(targetPath: Path, inodeNumber: InodeNumber): void {
+	#announceTarget(targetPath: Path, inodeNumber: InodeNumber, timeout: number): void {
 		const cancelPendingAdd = this.#pendingAdds.get(targetPath);
 
 		if (cancelPendingAdd !== undefined) { return cancelPendingAdd() }
 
-		this.#announcedTargets.set(targetPath, inodeNumber);
-		// Lock events for one batch are dispatched synchronously, so the mark must not outlive it.
-		queueMicrotask(() => {
-			if (this.#announcedTargets.get(targetPath) === inodeNumber) { this.#announcedTargets.delete(targetPath) }
-		});
+		const now = performance.now();
+
+		for (const [ path, announced ] of this.#announcedTargets) {
+			if (announced.expiresAt > now) { break }
+
+			this.#announcedTargets.delete(path);
+		}
+
+		if (this.#announcedTargets.size >= FileRenameHandler.#maxAnnouncedTargets) {
+			const oldestPath = this.#announcedTargets.keys().next().value;
+
+			if (oldestPath !== undefined) { this.#announcedTargets.delete(oldestPath) }
+		}
+
+		this.#announcedTargets.delete(targetPath);
+		this.#announcedTargets.set(targetPath, { inodeNumber, expiresAt: now + Math.max(timeout, 1000) });
+	}
+
+	/**
+	 * Consumes a rename announcement when the matching counterpart notification arrives.
+	 * @param targetPath - The announced rename destination.
+	 * @param inodeNumber - The inode associated with the announcement.
+	 * @returns True when the announcement is current and matches this inode.
+	 */
+	#consumeAnnouncedTarget(targetPath: Path, inodeNumber: InodeNumber): boolean {
+		const announced = this.#announcedTargets.get(targetPath);
+
+		if (announced === undefined) { return false }
+
+		this.#announcedTargets.delete(targetPath);
+
+		return announced.inodeNumber === inodeNumber && announced.expiresAt > performance.now();
 	}
 
 	/**

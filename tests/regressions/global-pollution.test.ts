@@ -7,14 +7,14 @@ const projectRoot = resolve(import.meta.dirname, '..', '..');
 const distEntry = resolve(projectRoot, 'dist', 'watchr.js');
 
 describe('regression B5: importing the library must not install a global Temporal', { timeout: 60_000 }, () => {
-	it('should leave globalThis.Temporal undefined after import', () => {
+	it('should not modify globalThis.Temporal after import', () => {
 		if (!existsSync(distEntry)) {
 			execSync('pnpm build', { cwd: projectRoot, stdio: 'ignore' });
 		}
 
 		expect(existsSync(distEntry), `${distEntry} missing after build`).toBe(true);
 
-		const script = `import(${JSON.stringify(distEntry)}).then(() => process.exit(typeof globalThis.Temporal === 'undefined' ? 0 : 1))`;
+		const script = `const temporalBeforeImport = globalThis.Temporal; import(${JSON.stringify(distEntry)}).then(() => process.exit(globalThis.Temporal === temporalBeforeImport ? 0 : 1))`;
 		let exitCode = 0;
 
 		try {

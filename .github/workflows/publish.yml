@@ -58,7 +58,7 @@ jobs:
             echo "skip=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          current="$(node -p "JSON.parse(require('node:fs').readFileSync('package.json')).version")"
+          current="$(node --input-type=module -e "import { readFileSync } from 'node:fs'; console.log(JSON.parse(readFileSync('package.json', 'utf8')).version);")"
           if [[ "$version" == "$current" ]]; then
             echo "No release-worthy commits since the latest tag."
             echo "skip=true" >> "$GITHUB_OUTPUT"

@@ -12,8 +12,9 @@
 Thumbs.db
 
 dist
-docs/
+docs/*
 !docs/release-process.md
+!docs/ux-refactor-validation.md
 node_modules
 package-lock.json
 __TREES__

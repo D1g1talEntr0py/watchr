@@ -262,7 +262,7 @@ describe('configured watcher lifecycle', () => {
 		const close = vi.fn();
 		const watcher = new Watchr(root, { emitInitial: true, handlers: { error, all, close } });
 		watchers.push(watcher);
-		const startupError = await watcher.start().catch((error) => error as Error);
+		const startupError = await watcher.start().catch((error) => error as Error) as Error;
 		expect(startupError).toBeInstanceOf(Error);
 		expect(startupError.message).toMatch(/Configured root is unavailable during initial scan/);
 		expect(startupError.message).not.toContain(root);

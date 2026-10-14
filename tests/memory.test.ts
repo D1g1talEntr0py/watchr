@@ -1,9 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { linkSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { Watchr } from '../src/watchr';
-import { FileSystemEvent, WatcherEvent } from '../src/watchr';
-import { cleanupTempRoots, closeWatchers, createReadyWatcher, createTempRoot, delay, waitForEvent } from './helpers/fs-fixtures';
+import { FileSystemEvent } from '../src/watchr';
+import { createWatcher, observeEvent, cleanupTempRoots, closeWatchers, createReadyWatcher, createTempRoot, delay, waitForEvent } from './helpers/fs-fixtures';
 
 const hasGc = typeof globalThis.gc === 'function';
 const skipReason = process.platform !== 'linux'
@@ -45,10 +44,10 @@ describe.skipIf(skipReason !== '')(`memory budgets${skipReason ? ` (skipped: ${s
 		buildFlat(root, fileCount);
 
 		// One warm-up open/close so lazily initialised module state is not charged to the sample.
-		(await createReadyWatcher(root, { ignoreInitial: true, recursive: false })).close();
+		(await createReadyWatcher(root, { emitInitial: false, recursive: false })).close();
 
 		const before = await settledHeapUsed();
-		await createReadyWatcher(root, { ignoreInitial: true, recursive: false });
+		await createReadyWatcher(root, { emitInitial: false, recursive: false });
 		const tracked = fileCount + 1;
 		const after = await settledHeapUsed();
 		const bytesPerPath = (after - before) / tracked;
@@ -60,15 +59,15 @@ describe.skipIf(skipReason !== '')(`memory budgets${skipReason ? ` (skipped: ${s
 		const root = createTempRoot('watchr-mem-cycles-');
 		buildFlat(root, 200);
 
-		(await createReadyWatcher(root, { ignoreInitial: true })).close();
+		(await createReadyWatcher(root, { emitInitial: false })).close();
 
 		const before = await settledHeapUsed();
 
 		for (let cycle = 0; cycle < 50; cycle++) {
-			const watcher = new Watchr(root, { ignoreInitial: true });
-			await watcher.readyLock;
+			const watcher = createWatcher(root, { emitInitial: false });
+			await watcher.start();
 			watcher.close();
-			expect(watcher.isClosed()).toBe(true);
+			expect(watcher.state).toBe('closed');
 		}
 
 		const residual = await settledHeapUsed() - before;
@@ -82,9 +81,9 @@ describe.skipIf(skipReason !== '')(`memory budgets${skipReason ? ` (skipped: ${s
 		for (let round = 0; round < 3; round++) {
 			writeFileSync(join(probes, `r${round}.txt`), 'tracked');
 		}
-		const watcher = await createReadyWatcher(root, { ignoreInitial: true, renameTimeout: 20 });
+		const watcher = await createReadyWatcher(root, { emitInitial: false, renameTimeout: 20 });
 		const errors: Error[] = [];
-		watcher.on(WatcherEvent.ERROR, (error: Error) => errors.push(error));
+		observeEvent(watcher, 'error', (error: Error) => errors.push(error));
 
 		for (let round = 0; round < 3; round++) {
 			const saved = join(probes, `r${round}.txt`);
@@ -130,7 +129,7 @@ describe.skipIf(skipReason !== '')('memory budgets: directory churn', { timeout:
 
 	it('should recognize a recreated subdirectory after removing it and its files', async () => {
 		const root = createTempRoot('watchr-mem-dir-');
-		const watcher = await createReadyWatcher(root, { ignoreInitial: true });
+		const watcher = await createReadyWatcher(root, { emitInitial: false });
 		const sub = join(root, 'sub');
 
 		const added = waitForEvent(watcher, FileSystemEvent.ADD_DIR, { path: sub });

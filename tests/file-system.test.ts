@@ -83,15 +83,15 @@ describe('FileSystem.getStats timeout', () => {
 		cleanupTempRoots();
 	});
 
-	it('rejects with path and timeout details when the timeout expires', async () => {
+	it('rejects with sanitized timeout details when the timeout expires', async () => {
 		const root = createTempRoot('watchr-fs-timeout-');
 		vi.mocked(stat).mockImplementationOnce(() => new Promise(() => {}));
 
 		await expect(FileSystem.getStats(root, { timeout: 1 })).rejects.toMatchObject({
 			name: 'TimeoutError',
 			code: 'WATCHR_STAT_TIMEOUT',
-			cause: { name: 'TimeoutError' },
-			message: `Stat operation timed out after 1ms for "${root}"`
+			message: 'Stat operation timed out after 1ms',
+			cause: { targetPath: root }
 		});
 	});
 

@@ -1,3 +1,4 @@
+import { createWatcher, observeEvent } from './helpers/fs-fixtures';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { Watchr } from '../src/watchr';
 import { writeFileSync, mkdtempSync, rmSync } from 'node:fs';
@@ -49,22 +50,22 @@ describe('Race Condition Fixes', () => {
 		try {
 			// Create multiple watchers simultaneously
 			for (let i = 0; i < 3; i++) {
-				watchers.push(new Watchr(testDir));
+				watchers.push(createWatcher(testDir));
 			}
 
 			// Wait for all watchers to be ready
-			await Promise.all(watchers.map((watcher) => watcher.readyLock));
+			await Promise.all(watchers.map((watcher) => watcher.start()));
 
 			// All watchers should be ready without errors
 			expect(watchers.length).toBe(3);
 			watchers.forEach(watcher => {
-				expect(watcher.isReady()).toBe(true);
-				expect(watcher.isClosed()).toBe(false);
+				expect(watcher.state).toBe('watching');
+				expect(watcher.state).not.toBe('closed');
 			});
 		} finally {
 			// Clean up watchers
 			watchers.forEach(watcher => {
-				if (!watcher.isClosed()) {
+				if (watcher.state !== 'closed') {
 					watcher.close();
 				}
 			});
@@ -72,14 +73,14 @@ describe('Race Condition Fixes', () => {
 	});
 
 	it('should handle rapid file operations without race conditions', async () => {
-		const watcher = new Watchr(testDir, { ignoreInitial: true });
+		const watcher = createWatcher(testDir, { emitInitial: false });
 		const expectedFiles = Array.from({ length: 5 }, (_unused, i) => join(testDir, `test-${i}.txt`));
 
 		try {
-			await watcher.readyLock;
+			await watcher.start();
 
 			const addsPromise = collectPaths((onPath) => {
-				watcher.on('add', (_stats, path: string) => onPath(path));
+				observeEvent(watcher, 'add', (_stats, path: string) => onPath(path));
 			}, expectedFiles);
 
 			// Create all files back to back with no artificial staggering
@@ -91,7 +92,7 @@ describe('Race Condition Fixes', () => {
 			expect(new Set(observed)).toEqual(new Set(expectedFiles));
 			expect(observed.length).toBe(expectedFiles.length);
 		} finally {
-			if (!watcher.isClosed()) {
+			if (watcher.state !== 'closed') {
 				watcher.close();
 			}
 		}
@@ -103,23 +104,23 @@ describe('Race Condition Fixes', () => {
 		try {
 			// Create and close watchers rapidly
 			for (let i = 0; i < 10; i++) {
-				const watcher = new Watchr(testDir);
+				const watcher = createWatcher(testDir);
 				watchers.push(watcher);
 
-				await watcher.readyLock;
+				await watcher.start();
 
 				watcher.close();
-				expect(watcher.isClosed()).toBe(true);
+				expect(watcher.state).toBe('closed');
 			}
 
 			// All watchers should be properly closed
 			watchers.forEach(watcher => {
-				expect(watcher.isClosed()).toBe(true);
+				expect(watcher.state).toBe('closed');
 			});
 		} finally {
 			// Ensure all watchers are closed
 			watchers.forEach(watcher => {
-				if (!watcher.isClosed()) {
+				if (watcher.state !== 'closed') {
 					watcher.close();
 				}
 			});
@@ -128,43 +129,31 @@ describe('Race Condition Fixes', () => {
 
 	it('should handle constructor error scenarios gracefully', async () => {
 		const nonExistentPath = join(testDir, 'non-existent-path-that-should-not-exist');
-		const watcher = new Watchr(nonExistentPath);
+		const watcher = createWatcher(nonExistentPath);
 		const errors: Error[] = [];
-
-		const errorPromise = new Promise<Error>((resolve, reject) => {
-			const timeout = setTimeout(() => reject(new Error('timed out waiting for error event')), 5000);
-
-			watcher.once('error', (error: Error) => {
-				clearTimeout(timeout);
-				errors.push(error);
-				resolve(error);
-			});
-		});
+		observeEvent(watcher, 'error', (error) => errors.push(error));
 
 		try {
 			// Should not throw immediately
 			expect(watcher).toBeDefined();
-			expect(watcher.isClosed()).toBe(false);
+			expect(watcher.state).not.toBe('closed');
 
-			// Error should be emitted (not thrown) for the non-existent path
-			const emittedError = await errorPromise;
-			expect(emittedError).toBeInstanceOf(Error);
-			expect(errors.length).toBeGreaterThan(0);
+			await expect(watcher.start()).rejects.toThrow('Path not found');
+			expect(errors).toEqual([]);
 			// Initialization failures are terminal after resources are rolled back.
-			expect(watcher.isClosed()).toBe(true);
-			await expect(watcher.readyLock).rejects.toThrow('Path not found');
+			expect(watcher.state).toBe('closed');
 		} finally {
-			if (!watcher.isClosed()) {
+			if (watcher.state !== 'closed') {
 				watcher.close();
 			}
 		}
 	});
 
 	it('should handle abort signal propagation correctly', async () => {
-		const watcher = new Watchr(testDir);
+		const watcher = createWatcher(testDir);
 
 		try {
-			await watcher.readyLock;
+			await watcher.start();
 
 			// Check that abort signal is properly initialized
 			expect(watcher.abortSignal).toBeDefined();
@@ -172,10 +161,10 @@ describe('Race Condition Fixes', () => {
 
 			// Close watcher and check signal is aborted
 			watcher.close();
-			expect(watcher.isClosed()).toBe(true);
+			expect(watcher.state).toBe('closed');
 			expect(watcher.abortSignal.aborted).toBe(true);
 		} finally {
-			if (!watcher.isClosed()) {
+			if (watcher.state !== 'closed') {
 				watcher.close();
 			}
 		}

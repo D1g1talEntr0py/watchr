@@ -218,7 +218,8 @@ export class FileSystem {
 
 		if (result === undefined) {
 			if (timeoutSignal?.aborted) {
-				const error = new Error(`Stat operation timed out after ${timeout}ms for "${targetPath}"`, { cause: timeoutSignal.reason });
+				const timeoutReason: unknown = timeoutSignal.reason;
+				const error = new Error(`Stat operation timed out after ${timeout}ms`, { cause: { targetPath, reason: timeoutReason } });
 				error.name = 'TimeoutError';
 				throw Object.assign(error, { code: 'WATCHR_STAT_TIMEOUT' });
 			}

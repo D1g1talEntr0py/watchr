@@ -8,8 +8,8 @@ import {
 	appendFileSync,
 	renameSync
 } from 'node:fs';
-import { Watchr, FileSystemEvent, WatcherEvent, type WatchrEventMap } from '../src/watchr';
-import { cleanupTempRoots, createTempRoot } from './helpers/fs-fixtures';
+import { Watchr, FileSystemEvent } from '../src/watchr';
+import { unobserveEvent, observeEvent, createWatcher, cleanupTempRoots, closeWatchers, collectEvents, createTempRoot, waitForEvent as waitForRecordedEvent } from './helpers/fs-fixtures';
 
 describe('Watchr', () => {
 	let testDir: string;
@@ -19,6 +19,7 @@ describe('Watchr', () => {
 	});
 
 	afterEach(() => {
+		closeWatchers();
 		vi.restoreAllMocks();
 		cleanupTempRoots();
 	});
@@ -35,24 +36,7 @@ describe('Watchr', () => {
 	 * @returns A promise resolving with the event path when the event arrives.
 	 */
 	function waitForEvent(watchr: Watchr, event: FileSystemEvent, path?: string): Promise<string> {
-		return new Promise<string>((resolve, reject) => {
-			const timeoutId = globalThis.setTimeout(() => {
-				watchr.off(event, onEvent);
-				reject(new Error(`timed out waiting for "${event}" event`));
-			}, 5000);
-
-			const onEvent = (...args: WatchrEventMap[FileSystemEvent]) => {
-				const [ , targetPath ] = args;
-
-				if (path !== undefined && targetPath !== path) { return }
-
-				globalThis.clearTimeout(timeoutId);
-				watchr.off(event, onEvent);
-				resolve(targetPath);
-			};
-
-			watchr.on(event, onEvent);
-		});
+		return waitForRecordedEvent(watchr, event, path === undefined ? {} : { path });
 	}
 
 	/**
@@ -66,19 +50,47 @@ describe('Watchr', () => {
 	}
 
 	describe('constructor', () => {
+		it('does not watch or scan until start is called', async () => {
+			createTestFile('existing.txt');
+			const watchr = createWatcher(testDir, { emitInitial: true });
+			const added = vi.fn();
+			observeEvent(watchr, 'add', added);
+
+			try {
+				await settle();
+				expect(watchr.state).not.toBe('watching');
+				expect(added).not.toHaveBeenCalled();
+				expect('readyLock' in watchr).toBe(false);
+				const initialEvent = waitForEvent(watchr, FileSystemEvent.ADD, join(testDir, 'existing.txt'));
+				const starting = watchr.start();
+				expect(watchr.start()).toBe(starting);
+				await starting;
+				await initialEvent;
+				expect(watchr.state).toBe('watching');
+				expect(added).toHaveBeenCalledTimes(1);
+				expect(watchr.start()).toBe(starting);
+			} finally {
+				watchr.close();
+			}
+		});
+
+		it('rejects start after close without attaching watchers', async () => {
+			const watchr = createWatcher(testDir);
+			watchr.close();
+			await expect(watchr.start()).rejects.toThrow('watcher is closed');
+		});
+
 		it('should create a new Watchr instance', () => {
-			const watchr = new Watchr();
+			const watchr = createWatcher(testDir);
 			expect(watchr).toBeInstanceOf(Watchr);
 			watchr.close();
 		});
 
-		it('exposes watchersClose as a public method', () => {
-			const watchr = new Watchr();
-			for (const member of [ 'renameWatchr', 'addWatcherConfig', 'error', 'emitEvent' ]) {
+		it('keeps engine wiring and EventEmitter methods out of the public API', () => {
+			const watchr = createWatcher(testDir);
+			for (const member of [ 'renameWatchr', 'addWatcherConfig', 'error', 'emitEvent', 'watchersClose', 'isReady', 'isClosed', 'isIgnored', 'on', 'once', 'off', 'emit' ]) {
 				expect(member in watchr).toBe(false);
 			}
-			expect(typeof watchr.watchersClose).toBe('function');
-			watchr.watchersClose();
 			watchr.close();
 		});
 
@@ -107,22 +119,22 @@ describe('Watchr', () => {
 		it('does not emit the platform warning on non-win32 platforms', () => {
 			vi.spyOn(process, 'platform', 'get').mockReturnValue('linux');
 			const warningSpy = vi.spyOn(process, 'emitWarning').mockImplementation(() => undefined);
-			const watchr = new Watchr(testDir);
+			const watchr = createWatcher(testDir);
 
 			expect(warningSpy).not.toHaveBeenCalled();
 			watchr.close();
 		});
 
 		it('should throw for invalid renameTimeout option', () => {
-			expect(() => new Watchr(testDir, { renameTimeout: -1 })).toThrow('renameTimeout must be a non-negative finite number');
+			expect(() => createWatcher(testDir, { renameTimeout: -1 })).toThrow('renameTimeout must be a non-negative finite number');
 		});
 
 		it.each([ -1, Number.NaN, Number.POSITIVE_INFINITY ])('should throw for invalid statTimeout option %s', (statTimeout) => {
-			expect(() => new Watchr(testDir, { statTimeout })).toThrow('statTimeout must be a non-negative finite number');
+			expect(() => createWatcher(testDir, { statTimeout })).toThrow('statTimeout must be a non-negative finite number');
 		});
 
 		it.each([ -1, Number.NaN, Number.POSITIVE_INFINITY ])('should throw for invalid fallbackScanInterval option %s', (fallbackScanInterval) => {
-			expect(() => new Watchr(testDir, { fallbackScanInterval })).toThrow('fallbackScanInterval must be a non-negative finite number');
+			expect(() => createWatcher(testDir, { fallbackScanInterval })).toThrow('fallbackScanInterval must be a non-negative finite number');
 		});
 
 		it.each([ 'yes', 1, null ])('should throw for non-boolean followSymlinks option %s', (followSymlinks) => {
@@ -137,30 +149,24 @@ describe('Watchr', () => {
 			let watchr: Watchr | undefined;
 
 			expect(() => {
-				watchr = new Watchr(testDir, { ignore: /ignored\\.txt$/ });
+				watchr = createWatcher(testDir, { ignore: /ignored\\.txt$/ });
 			}).not.toThrow();
 
 			watchr?.close();
 		});
 
-		it('should accept throwIfNoEntry option', () => {
-			let watchr: Watchr | undefined;
-
-			expect(() => {
-				watchr = new Watchr(testDir, { throwIfNoEntry: false });
-			}).not.toThrow();
-
-			watchr?.close();
+		it.each([ 'yes', 1, null ])('rejects non-boolean emitInitial option %s', (emitInitial) => {
+			expect(() => Reflect.construct(Watchr, [ testDir, { emitInitial } ])).toThrow('emitInitial must be a boolean');
 		});
 
-		it('should start watching paths provided in the constructor', async () => {
+		it('should watch configured paths after start', async () => {
 			createTestFile('test.txt');
 			const handler = vi.fn();
-			const watchr = new Watchr(testDir, { ignoreInitial: true }, handler);
-			await watchr.readyLock;
+			const watchr = createWatcher(testDir, { emitInitial: false, handlers: { all: handler } });
+			await watchr.start();
 
 			const eventPromise = new Promise<void>((resolve) => {
-				watchr.on(FileSystemEvent.ADD, (_stats, path) => {
+				observeEvent(watchr, FileSystemEvent.ADD, (_stats, path) => {
 					expect(path).toBe(join(testDir, 'newfile.txt'));
 					resolve();
 				});
@@ -175,11 +181,14 @@ describe('Watchr', () => {
 		it('should apply native ignore patterns', async () => {
 			const ignoredFilePath = join(testDir, 'ignored.log');
 			const includedFilePath = join(testDir, 'included.txt');
-			const watchr = new Watchr(testDir, { ignore: /\.log$/ });
-			await watchr.readyLock;
+			writeFileSync(ignoredFilePath, 'ignored');
+			writeFileSync(includedFilePath, 'visible');
+			const watchr = createWatcher(testDir, { ignore: /\.log$/, emitInitial: true });
+			const { events } = collectEvents(watchr);
+			await watchr.start();
 
-			expect(watchr.isIgnored(ignoredFilePath, /\.log$/)).toBe(true);
-			expect(watchr.isIgnored(includedFilePath, /\.log$/)).toBe(false);
+			expect(events.some(({ path }) => path === ignoredFilePath)).toBe(false);
+			expect(events.some(({ path }) => path === includedFilePath)).toBe(true);
 
 			watchr.close();
 		});
@@ -190,11 +199,14 @@ describe('Watchr', () => {
 			const ignoredFilePath = join(logsDirectory, 'ignored.log');
 			const includedFilePath = join(logsDirectory, 'included.txt');
 
-			const watchr = new Watchr(testDir, { ignore: '**/*.log' });
-			await watchr.readyLock;
+			writeFileSync(ignoredFilePath, 'ignored');
+			writeFileSync(includedFilePath, 'visible');
+			const watchr = createWatcher(testDir, { ignore: '**/*.log', emitInitial: true });
+			const { events } = collectEvents(watchr);
+			await watchr.start();
 
-			expect(watchr.isIgnored(ignoredFilePath, '**/*.log')).toBe(true);
-			expect(watchr.isIgnored(includedFilePath, '**/*.log')).toBe(false);
+			expect(events.some(({ path }) => path === ignoredFilePath)).toBe(false);
+			expect(events.some(({ path }) => path === includedFilePath)).toBe(true);
 
 			watchr.close();
 		});
@@ -205,29 +217,29 @@ describe('Watchr', () => {
 			mkdirSync(dir1, { recursive: true });
 			mkdirSync(dir2, { recursive: true });
 
-			const watchr = new Watchr([dir1, dir2]);
-			await watchr.readyLock;
+			const watchr = createWatcher([dir1, dir2]);
+			await watchr.start();
 
 			const handler = vi.fn();
-			watchr.on(FileSystemEvent.ADD, handler);
+			observeEvent(watchr, FileSystemEvent.ADD, handler);
 
 			const file1 = join(dir1, 'file1.txt');
 			const file2 = join(dir2, 'file2.txt');
 
 			const eventPromise1 = new Promise<void>(resolve => {
-				watchr.once(FileSystemEvent.ADD, (_stats, path) => {
+				observeEvent(watchr, FileSystemEvent.ADD, (_stats, path) => {
 					expect(path).toBe(file1);
 					resolve();
-				});
+				}, true);
 			});
 			createTestFile('dir1/file1.txt');
 			await eventPromise1;
 
 			const eventPromise2 = new Promise<void>(resolve => {
-				watchr.once(FileSystemEvent.ADD, (_stats, path) => {
+				observeEvent(watchr, FileSystemEvent.ADD, (_stats, path) => {
 					expect(path).toBe(file2);
 					resolve();
-				});
+				}, true);
 			});
 			createTestFile('dir2/file2.txt');
 			await eventPromise2;
@@ -235,28 +247,26 @@ describe('Watchr', () => {
 			watchr.close();
 		});
 
-		it('should emit an error if path does not exist', async () => {
+		it('rejects startup with a sanitized error if path does not exist', async () => {
 			const nonExistentPath = join(testDir, 'non-existent');
-			const watchr = new Watchr(nonExistentPath);
-			const error = await new Promise<Error>((resolve) => {
-				watchr.on(WatcherEvent.ERROR, resolve);
-			});
-			expect(error).toBeInstanceOf(Error);
-			expect(error.message).to.include('Path not found');
-			expect(error.message).not.toContain(nonExistentPath);
+			const watchr = createWatcher(nonExistentPath);
+			const failure = watchr.start();
+			await expect(failure).rejects.toBeInstanceOf(Error);
+			await expect(failure).rejects.toThrow('Path not found');
+			await expect(failure).rejects.not.toThrow(nonExistentPath);
 			watchr.close();
 		});
 
-		it('should reject readyLock when startup fails', async () => {
-			const watchr = new Watchr(join(testDir, 'missing-startup-root'));
-			watchr.on(WatcherEvent.ERROR, vi.fn());
+		it('should reject start when startup fails', async () => {
+			const watchr = createWatcher(join(testDir, 'missing-startup-root'));
+			observeEvent(watchr, 'error', vi.fn());
 
-			await expect(watchr.readyLock).rejects.toThrow('Path not found');
-			expect(watchr.isReady()).toBe(false);
+			await expect(watchr.start()).rejects.toThrow('Path not found');
+			expect(watchr.state).not.toBe('watching');
 			watchr.close();
 		});
 
-		it.skipIf(process.platform === 'win32')('should emit an error for unsupported file types', async () => {
+		it.skipIf(process.platform === 'win32')('rejects startup for unsupported file types', async () => {
 			const unsupportedPath = join(testDir, 'unsupported-file');
 			const server = createServer();
 			await new Promise<void>((resolveListen, rejectListen) => {
@@ -264,11 +274,11 @@ describe('Watchr', () => {
 				server.listen(unsupportedPath, resolveListen);
 			});
 
-			const watchr = new Watchr(unsupportedPath);
+			const watchr = createWatcher(unsupportedPath);
 			try {
-				const error = await new Promise<Error>((resolveError) => watchr.once(WatcherEvent.ERROR, resolveError));
-				expect(error.message).toContain('Target path type is not supported');
-				expect(error.message).not.toContain(unsupportedPath);
+				const failure = watchr.start();
+				await expect(failure).rejects.toThrow('Target path type is not supported');
+				await expect(failure).rejects.not.toThrow(unsupportedPath);
 			} finally {
 				watchr.close();
 				server.close();
@@ -276,17 +286,17 @@ describe('Watchr', () => {
 		});
 
 		it('should not watch if closed during setup', async () => {
-			const watchr = new Watchr(testDir);
-			watchr.close();
-			await expect(watchr.readyLock).rejects.toThrow('watcher closed before becoming ready');
-
+			const watchr = createWatcher(testDir);
 			const handler = vi.fn();
-			watchr.on(WatcherEvent.ALL, handler);
+			observeEvent(watchr, 'all', handler);
+			const starting = watchr.start();
+			watchr.close();
+			await expect(starting).rejects.toThrow('watcher closed before becoming ready');
 
 			// A control watcher on the same directory bounds the wait deterministically:
 			// once it observes the new file, the closed watcher had every chance to react.
-			const control = new Watchr(testDir, { ignoreInitial: true });
-			await control.readyLock;
+			const control = createWatcher(testDir, { emitInitial: false });
+			await control.start();
 			const controlEvent = waitForEvent(control, FileSystemEvent.ADD, join(testDir, 'newfile.txt'));
 
 			createTestFile('newfile.txt');
@@ -296,36 +306,35 @@ describe('Watchr', () => {
 			expect(handler).not.toHaveBeenCalled();
 		});
 
-		it('should emit "ready" once during startup', async () => {
-			const watchr = new Watchr(testDir);
-			const readySpy = vi.fn();
-			watchr.on(WatcherEvent.READY, readySpy);
-			await watchr.readyLock;
+		it('resolves startup to the watching instance without a ready event', async () => {
+			const watchr = createWatcher(testDir);
+			expect(await watchr.start()).toBe(watchr);
 			await settle();
 
-			expect(readySpy).toHaveBeenCalledTimes(1);
+			expect(watchr.state).toBe('watching');
 			watchr.close();
 		});
 
-		it('should reject readyLock if closed before ready', async () => {
-			const watchr = new Watchr(testDir);
+		it('should reject start if closed before ready', async () => {
+			const watchr = createWatcher(testDir);
+			const starting = watchr.start();
 			watchr.close();
 
-			await expect(watchr.readyLock).rejects.toThrow('watcher closed before becoming ready');
+			await expect(starting).rejects.toThrow('watcher closed before becoming ready');
 		});
 	});
 
 	describe('close', () => {
 		it('should stop watching for changes', async () => {
-			const watchr = new Watchr(testDir);
-			await watchr.readyLock;
+			const watchr = createWatcher(testDir);
+			await watchr.start();
 			const handler = vi.fn();
-			watchr.on(FileSystemEvent.ADD, handler);
+			observeEvent(watchr, FileSystemEvent.ADD, handler);
 			watchr.close();
 
 			// A control watcher bounds the wait: once it sees the file, the closed watcher had its chance.
-			const control = new Watchr(testDir, { ignoreInitial: true });
-			await control.readyLock;
+			const control = createWatcher(testDir, { emitInitial: false });
+			await control.start();
 			const controlEvent = waitForEvent(control, FileSystemEvent.ADD, join(testDir, 'newfile.txt'));
 
 			createTestFile('newfile.txt');
@@ -336,18 +345,18 @@ describe('Watchr', () => {
 		});
 
 		it('should not throw when called multiple times', async () => {
-			const watchr = new Watchr(testDir);
-			await watchr.readyLock;
+			const watchr = createWatcher(testDir);
+			await watchr.start();
 			watchr.close();
 			expect(() => watchr.close()).not.toThrow();
 		});
 
 		it('should not emit "close" event if already closed', async () => {
-			const watchr = new Watchr(testDir);
-			await watchr.readyLock;
+			const watchr = createWatcher(testDir);
+			await watchr.start();
 
 			const closeSpy = vi.fn();
-			watchr.on(WatcherEvent.CLOSE, closeSpy);
+			observeEvent(watchr, 'close', closeSpy);
 
 			watchr.close(); // First call
 			expect(closeSpy).toHaveBeenCalledTimes(1);
@@ -357,24 +366,24 @@ describe('Watchr', () => {
 		});
 
 		it('should dispose through Symbol.dispose', async () => {
-			const watchr = new Watchr(testDir);
-			await watchr.readyLock;
+			const watchr = createWatcher(testDir);
+			await watchr.start();
 			const closeSpy = vi.fn();
 
-			watchr.on(WatcherEvent.CLOSE, closeSpy);
+			observeEvent(watchr, 'close', closeSpy);
 			watchr[Symbol.dispose]();
 
-			expect(watchr.isClosed()).toBe(true);
+			expect(watchr.state).toBe('closed');
 			expect(watchr.abortSignal.aborted).toBe(true);
 			expect(closeSpy).toHaveBeenCalledTimes(1);
 		});
 
 		it('should not emit "close" more than once when disposed after close', async () => {
-			const watchr = new Watchr(testDir);
-			await watchr.readyLock;
+			const watchr = createWatcher(testDir);
+			await watchr.start();
 			const closeSpy = vi.fn();
 
-			watchr.on(WatcherEvent.CLOSE, closeSpy);
+			observeEvent(watchr, 'close', closeSpy);
 			watchr.close();
 			watchr[Symbol.dispose]();
 
@@ -384,28 +393,29 @@ describe('Watchr', () => {
 	});
 
 	describe('safe emission boundary', () => {
-		it('should emit error before close when startup fails and emit close exactly once', async () => {
-			const watchr = new Watchr(join(testDir, 'missing-root'));
+		it('rejects fatal startup without an error callback and closes exactly once', async () => {
+			const watchr = createWatcher(join(testDir, 'missing-root'));
 			const order: string[] = [];
-			watchr.on(WatcherEvent.ERROR, () => order.push('error'));
-			watchr.on(WatcherEvent.CLOSE, () => order.push('close'));
+			observeEvent(watchr, 'error', () => order.push('error'));
+			observeEvent(watchr, 'close', () => order.push('close'));
 
-			await expect(watchr.readyLock).rejects.toThrow('Path not found');
+			await expect(watchr.start()).rejects.toThrow('Path not found');
 			await settle();
 
-			expect(order).toEqual([ 'error', 'close' ]);
-			expect(watchr.isClosed()).toBe(true);
+			watchr.close();
+			expect(order).toEqual([ 'close' ]);
+			expect(watchr.state).toBe('closed');
 		});
 	});
 
 	describe('watch behavior', () => {
 		it('should allow a new watcher to start after a previous initialization fails', async () => {
-			const failed = new Watchr(join(testDir, 'missing'));
-			failed.on(WatcherEvent.ERROR, () => undefined);
-			await expect(failed.readyLock).rejects.toThrow('Path not found');
-			const recovered = new Watchr(testDir);
-			await recovered.readyLock;
-			expect(recovered.isClosed()).toBe(false);
+			const failed = createWatcher(join(testDir, 'missing'));
+			observeEvent(failed, 'error', () => undefined);
+			await expect(failed.start()).rejects.toThrow('Path not found');
+			const recovered = createWatcher(testDir);
+			await recovered.start();
+			expect(recovered.state).not.toBe('closed');
 			recovered.close();
 		});
 
@@ -414,22 +424,22 @@ describe('Watchr', () => {
 				throw new Error('handler exploded');
 			});
 
-			const watchr = new Watchr(testDir, { ignoreInitial: true, renameTimeout: 0 }, throwingHandler);
-			await watchr.readyLock;
+			const watchr = createWatcher(testDir, { emitInitial: false, renameTimeout: 0, handlers: { all: throwingHandler } });
+			await watchr.start();
 
 			const errorPromise = new Promise<Error>((resolve, reject) => {
 				const timeoutId = globalThis.setTimeout(() => {
-					watchr.off(WatcherEvent.ERROR, onError);
+					unobserveEvent(watchr, 'error', onError);
 					reject(new Error('timed out waiting for thrown handler error'));
 				}, 2000);
 
 				const onError = (error: Error) => {
 					clearTimeout(timeoutId);
-					watchr.off(WatcherEvent.ERROR, onError);
+					unobserveEvent(watchr, 'error', onError);
 					resolve(error);
 				};
 
-				watchr.on(WatcherEvent.ERROR, onError);
+				observeEvent(watchr, 'error', onError);
 			});
 
 			createTestFile('handler-throws.txt');
@@ -446,8 +456,8 @@ describe('Watchr', () => {
 			const filePath = join(testDir, 'direct-file.txt');
 			createTestFile('direct-file.txt');
 
-			const watchr = new Watchr(filePath, { ignoreInitial: true });
-			await watchr.readyLock;
+			const watchr = createWatcher(filePath, { emitInitial: false });
+			await watchr.start();
 
 			const changePromise = waitForEvent(watchr, FileSystemEvent.CHANGE, filePath);
 			appendFileSync(filePath, 'more content');
@@ -458,24 +468,23 @@ describe('Watchr', () => {
 		});
 	});
 
-	describe('watchPath', () => {
+	describe('configured targets', () => {
 		it('should not watch an ignored path', async () => {
 			const options = {
 				ignore: (path: string) => path.endsWith('ignored.txt')
 			};
-			const watchr = new Watchr([], options);
+			const watchr = createWatcher(join(testDir, 'ignored.txt'), options);
 
 			// Track events to verify ignored files don't produce events
 			const events: Array<{ event: string, path: string }> = [];
-			watchr.on('add', (_stats, path) => events.push({ event: 'add', path }));
-			watchr.on('addDir', (_stats, path) => events.push({ event: 'addDir', path }));
+			observeEvent(watchr, 'add', (_stats, path) => events.push({ event: 'add', path }));
+			observeEvent(watchr, 'addDir', (_stats, path) => events.push({ event: 'addDir', path }));
 
 			const ignoredPath = join(testDir, 'ignored.txt');
 			createTestFile('ignored.txt');
 
-			await watchr.watchPath(ignoredPath, options);
+			await watchr.start();
 
-			// watchPath resolves after setup; drain scheduled turns for any stray events.
 			await settle();
 
 			// Should not generate events for ignored paths
@@ -491,15 +500,14 @@ describe('Watchr', () => {
 					throw new Error('ignore exploded');
 				}
 			};
-			const watchr = new Watchr([], options);
-			const targetPath = join(testDir, 'callback-throw.txt');
+			const watchr = createWatcher(join(testDir, 'callback-throw.txt'), options);
 			createTestFile('callback-throw.txt');
 
 			const errorPromise = new Promise<Error>((resolve) => {
-				watchr.once(WatcherEvent.ERROR, resolve);
+				observeEvent(watchr, 'error', resolve, true);
 			});
 
-			await watchr.watchPath(targetPath, options);
+			await watchr.start();
 			const error = await errorPromise;
 
 			expect(error).toBeInstanceOf(Error);
@@ -512,10 +520,10 @@ describe('Watchr', () => {
 			const options = {
 				ignore: [ 'ignored.txt', () => { throw new Error('nested ignore exploded') } ]
 			};
-			const watchr = new Watchr([]);
-			const errorPromise = new Promise<Error>((resolve) => watchr.once(WatcherEvent.ERROR, resolve));
+			const watchr = createWatcher(join(testDir, 'callback-array-throw.txt'), options);
+			const errorPromise = new Promise<Error>((resolve) => observeEvent(watchr, 'error', resolve, true));
 
-			await watchr.watchPath(join(testDir, 'callback-array-throw.txt'), options);
+			await watchr.start();
 			await expect(errorPromise).resolves.toMatchObject({ message: 'ignore callback failed.' });
 			watchr.close();
 		});
@@ -526,15 +534,10 @@ describe('Watchr', () => {
 			createTestFile(watchedFile);
 			createTestFile(unwatchedFile);
 
-			const watchr = new Watchr(join(testDir, watchedFile));
-			await watchr.readyLock;
-
+			const watchr = createWatcher(join(testDir, watchedFile), { emitInitial: true });
 			const events: Array<{ event: string, path: string }> = [];
-			watchr.on(WatcherEvent.ALL, (event: string, _stats: unknown, path: string) => events.push({ event, path }));
-
-			// The initial add is held for `renameTimeout`; a change inside that window folds into it,
-			// so let it settle before modifying the watched file.
-			await waitForEvent(watchr, FileSystemEvent.ADD, join(testDir, watchedFile));
+			observeEvent(watchr, 'all', (event: string, _stats: unknown, path: string) => events.push({ event, path }));
+			await watchr.start();
 
 			// Modify the unwatched sibling first; the watched-file change below bounds the wait,
 			// since both files share the same underlying directory watcher.
@@ -554,11 +557,11 @@ describe('Watchr', () => {
 
 	describe('integration', () => {
 		it('should emit "add" event for new files', async () => {
-			const watchr = new Watchr(testDir);
-			await watchr.readyLock;
+			const watchr = createWatcher(testDir);
+			await watchr.start();
 
 			const eventPromise = new Promise<void>((resolve) => {
-				watchr.on(FileSystemEvent.ADD, (_stats, path) => {
+				observeEvent(watchr, FileSystemEvent.ADD, (_stats, path) => {
 					expect(path).toBe(join(testDir, 'newfile.txt'));
 					resolve();
 				});
@@ -572,11 +575,11 @@ describe('Watchr', () => {
 
 		it('should emit "change" event for file modifications', async () => {
 			createTestFile('test.txt', 'initial content');
-			const watchr = new Watchr(testDir, { ignoreInitial: true });
-			await watchr.readyLock;
+			const watchr = createWatcher(testDir, { emitInitial: false });
+			await watchr.start();
 
 			const eventPromise = new Promise<void>((resolve) => {
-				watchr.on(FileSystemEvent.CHANGE, (_stats, path) => {
+				observeEvent(watchr, FileSystemEvent.CHANGE, (_stats, path) => {
 					expect(path).toBe(join(testDir, 'test.txt'));
 					resolve();
 				});
@@ -591,24 +594,24 @@ describe('Watchr', () => {
 		it('should emit events for consecutive atomic saves on a watched file path', async () => {
 			createTestFile('atomic.txt', 'initial content');
 			const filePath = join(testDir, 'atomic.txt');
-			const watchr = new Watchr(filePath, { ignoreInitial: true, renameTimeout: 50 });
-			await watchr.readyLock;
+			const watchr = createWatcher(filePath, { emitInitial: false, renameTimeout: 50 });
+			await watchr.start();
 
 			const waitForFileEvent = () => new Promise<void>((resolve, reject) => {
 				const timeoutId = globalThis.setTimeout(() => {
-					watchr.off(WatcherEvent.ALL, onAll);
+					unobserveEvent(watchr, 'all', onAll);
 					reject(new Error('timed out waiting for event after atomic save'));
 				}, 2000);
 
 				const onAll = (_event: FileSystemEvent, _stats: unknown, targetPath?: string, targetPathNext?: string) => {
 					if (targetPath === filePath || targetPathNext === filePath) {
 						clearTimeout(timeoutId);
-						watchr.off(WatcherEvent.ALL, onAll);
+						unobserveEvent(watchr, 'all', onAll);
 						resolve();
 					}
 				};
 
-				watchr.on(WatcherEvent.ALL, onAll);
+				observeEvent(watchr, 'all', onAll);
 			});
 
 			const atomicSave = (content: string) => {
@@ -629,11 +632,11 @@ describe('Watchr', () => {
 
 		it('should emit "delete" event for file deletions', async () => {
 			createTestFile('test.txt');
-			const watchr = new Watchr(testDir, { ignoreInitial: true });
-			await watchr.readyLock;
+			const watchr = createWatcher(testDir, { emitInitial: false });
+			await watchr.start();
 
 			const eventPromise = new Promise<void>((resolve) => {
-				watchr.on(FileSystemEvent.UNLINK, (_stats, path) => {
+				observeEvent(watchr, FileSystemEvent.UNLINK, (_stats, path) => {
 					expect(path).toBe(join(testDir, 'test.txt'));
 					resolve();
 				});
@@ -647,11 +650,11 @@ describe('Watchr', () => {
 
 		it('should emit "rename" event for file renames', async () => {
 			createTestFile('old.txt');
-			const watchr = new Watchr(testDir, { ignoreInitial: true, renameTimeout: 50 });
-			await watchr.readyLock;
+			const watchr = createWatcher(testDir, { emitInitial: false, renameTimeout: 50 });
+			await watchr.start();
 
 			const eventPromise = new Promise<void>((resolve) => {
-				watchr.on(FileSystemEvent.RENAME, (stats, path, newPath) => {
+				observeEvent(watchr, FileSystemEvent.RENAME, (stats, path, newPath) => {
 					expect(path).toBe(join(testDir, 'old.txt'));
 					expect(newPath).toBe(join(testDir, 'new.txt'));
 					expect(stats).toBeDefined();
@@ -666,18 +669,13 @@ describe('Watchr', () => {
 			watchr.close();
 		});
 
-		it('should ignore initial files if "ignoreInitial" is true', async () => {
+		it('suppresses initial files by default', async () => {
 			createTestFile('existing.txt');
 			const handler = vi.fn();
-			const watchr = new Watchr(testDir, { ignoreInitial: true }, handler);
-			await watchr.readyLock;
+			const watchr = createWatcher(testDir, { handlers: { all: handler } });
+			await watchr.start();
 
-			// The handler is called for 'ready' and other events, but not for the initial file.
-			// Let's check that it wasn't called for the 'add' event of the initial file.
-			const addCalls = handler.mock.calls.filter(
-				(call) => call[0] === FileSystemEvent.ADD
-			);
-			expect(addCalls.length).toBe(0);
+			expect(handler).not.toHaveBeenCalled();
 
 			watchr.close();
 		});
@@ -695,7 +693,7 @@ describe('Watchr', () => {
 	// 		);
 
 	// 		const watchr = new Watchr(dirWithSubfolder, { recursive: true });
-	// 		await watchr.readyLock;
+	// 		await watchr.start();
 
 	// 		// With native recursive watching, subPathEventManager should never be called
 	// 		expect(subPathSpy).not.toHaveBeenCalled();
@@ -711,8 +709,8 @@ describe('Watchr', () => {
 			const level2 = join(level1, 'level2');
 			mkdirSync(level2, { recursive: true });
 
-			const watchr = new Watchr(testDir, { recursive: true, ignoreInitial: true });
-			await watchr.readyLock;
+			const watchr = createWatcher(testDir, { recursive: true, emitInitial: false });
+			await watchr.start();
 
 			const nestedFile = join(level2, 'nested.txt');
 			const addPromise = waitForEvent(watchr, FileSystemEvent.ADD, nestedFile);
@@ -730,10 +728,10 @@ describe('Watchr', () => {
 			mkdirSync(nestedDir);
 			writeFileSync(nestedFile, 'x');
 
-			const watchr = new Watchr(testDir, { renameTimeout: 0 });
+			const watchr = createWatcher(testDir, { emitInitial: true, renameTimeout: 0 });
 			const initialAdds: string[] = [];
-			watchr.on(FileSystemEvent.ADD, (_stats, path) => initialAdds.push(path));
-			await watchr.readyLock;
+			observeEvent(watchr, FileSystemEvent.ADD, (_stats, path) => initialAdds.push(path));
+			await watchr.start();
 			await settle();
 
 			expect(initialAdds).toContain(nestedFile);
@@ -754,10 +752,10 @@ describe('Watchr', () => {
 			writeFileSync(nestedFile, 'x');
 			writeFileSync(topFile, 'x');
 
-			const watchr = new Watchr(testDir, { recursive: false, renameTimeout: 0 });
+			const watchr = createWatcher(testDir, { emitInitial: true, recursive: false, renameTimeout: 0 });
 			const events: Array<{ event: string, path: string }> = [];
-			watchr.on(WatcherEvent.ALL, (event: string, _stats: unknown, path: string) => events.push({ event, path }));
-			await watchr.readyLock;
+			observeEvent(watchr, 'all', (event: string, _stats: unknown, path: string) => events.push({ event, path }));
+			await watchr.start();
 			await settle();
 
 			expect(events).toContainEqual({ event: FileSystemEvent.ADD_DIR, path: nestedDir });

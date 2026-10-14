@@ -1,9 +1,10 @@
+import { createWatcher as createRecordedWatcher, unobserveEvent, observeEvent } from './helpers/fs-fixtures';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { chmodSync, closeSync, linkSync, mkdirSync, mkdtempSync, openSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { Watchr, type WatchrStats, type WatchrOptions } from '../src/watchr';
+import { Watchr, type FileSystemEvent, type WatchrStats, type WatchrOptions } from '../src/watchr';
 
 /** Event payload delivered to file system event listeners */
 type EventPayload = [ stats: WatchrStats, targetPath: string, targetPathNext?: string ];
@@ -28,10 +29,10 @@ function createTempDir(): string {
  * @param options The watcher options
  * @returns A promise resolving to the ready watcher
  */
-async function createWatcher(target: string[] | string, options: WatchrOptions = { ignoreInitial: true }): Promise<Watchr> {
-	const watcher = new Watchr(target, options);
+async function createWatcher(target: string[] | string, options: WatchrOptions = { emitInitial: false }): Promise<Watchr> {
+	const watcher = createRecordedWatcher(target, options);
 	watchers.push(watcher);
-	await watcher.readyLock;
+	await watcher.start();
 
 	return watcher;
 }
@@ -43,7 +44,7 @@ async function createWatcher(target: string[] | string, options: WatchrOptions =
  * @param timeoutMs Maximum time to wait before rejecting
  * @returns A promise resolving to the event arguments [stats, targetPath, targetPathNext?]
  */
-function waitForEvent(watcher: Watchr, eventName: string, timeoutMs: number = 5000): Promise<EventPayload> {
+function waitForEvent(watcher: Watchr, eventName: FileSystemEvent, timeoutMs: number = 5000): Promise<EventPayload> {
 	return new Promise<EventPayload>((resolve, reject) => {
 		const onEvent = (stats: WatchrStats, targetPath: string, targetPathNext?: string): void => {
 			clearTimeout(timeout);
@@ -51,11 +52,11 @@ function waitForEvent(watcher: Watchr, eventName: string, timeoutMs: number = 50
 		};
 
 		const timeout = setTimeout(() => {
-			watcher.off(eventName, onEvent);
+			unobserveEvent(watcher, eventName, onEvent);
 			reject(new Error(`timed out after ${timeoutMs}ms waiting for '${eventName}' event`));
 		}, timeoutMs);
 
-		watcher.once(eventName, onEvent);
+		observeEvent(watcher, eventName, onEvent, true);
 	});
 }
 
@@ -70,7 +71,7 @@ function inodeOf(targetPath: string): number {
 
 afterEach(() => {
 	for (const watcher of watchers.splice(0)) {
-		if (!watcher.isClosed()) {
+		if (watcher.state !== 'closed') {
 			watcher.close();
 		}
 	}
@@ -112,9 +113,9 @@ describe('Watchr integration', () => {
 		mkdirSync(parent);
 		const filePath = join(parent, 'file.txt');
 		writeFileSync(filePath, 'original');
-		const watcher = await createWatcher(filePath, { ignoreInitial: true, recursive: false, statTimeout: 250 });
+		const watcher = await createWatcher(filePath, { emitInitial: false, recursive: false, statTimeout: 250 });
 		const errors: Error[] = [];
-		watcher.on('error', (error) => errors.push(error));
+		observeEvent(watcher, 'error', (error) => errors.push(error));
 		const descriptor = openSync(filePath, 'r+');
 		chmodSync(parent, 0);
 
@@ -178,9 +179,9 @@ describe('Watchr integration', () => {
 		const watchDir = createTempDir();
 		const targetPath = join(watchDir, 'entry');
 		writeFileSync(targetPath, 'original');
-		const watcher = await createWatcher(watchDir, { ignoreInitial: true, renameTimeout: 0 });
+		const watcher = await createWatcher(watchDir, { emitInitial: false, renameTimeout: 0 });
 		const events: string[] = [];
-		watcher.on('all', (event, _stats, path) => {
+		observeEvent(watcher, 'all', (event, _stats, path) => {
 			if (path === targetPath) { events.push(event) }
 		});
 
@@ -222,7 +223,7 @@ describe('Watchr integration', () => {
 		linkSync(original, linked);
 		const watcher = await createWatcher(watchDir);
 		const observed: Array<{ path: string, pathNext: string | undefined, inode: number | bigint }> = [];
-		watcher.on('all', (_event, stats, path, pathNext) => observed.push({ path, pathNext, inode: stats.inodeNumber }));
+		observeEvent(watcher, 'all', (_event, stats, path, pathNext) => observed.push({ path, pathNext, inode: stats.inodeNumber }));
 
 		renameSync(linked, renamed);
 		await vi.waitFor(() => expect(observed.some(({ path, pathNext }) => path === renamed || pathNext === renamed)).toBe(true));
@@ -254,12 +255,12 @@ describe('Watchr integration', () => {
 		const visiblePath = join(watchDir, 'visible.txt');
 
 		const watcher = await createWatcher(watchDir, {
-			ignoreInitial: true,
+			emitInitial: false,
 			ignore: (targetPath: string) => targetPath.includes('ignored')
 		});
 
 		const observedPaths: string[] = [];
-		watcher.on('all', (_event: string, _stats: WatchrStats, targetPath: string) => observedPaths.push(targetPath));
+		observeEvent(watcher, 'all', (_event: string, _stats: WatchrStats, targetPath: string) => observedPaths.push(targetPath));
 
 		const addPromise = waitForEvent(watcher, 'add');
 
@@ -275,11 +276,11 @@ describe('Watchr integration', () => {
 		const watchDir = createTempDir();
 		const visiblePath = join(watchDir, 'visible.txt');
 		const watcher = await createWatcher(watchDir, {
-			ignoreInitial: true,
-			ignore: [ '*.log', /hidden\.tmp/g, (path: string) => path === 'secret.txt' ]
+			emitInitial: false,
+			ignore: [ '*.log', /hidden\.tmp/g, (path: string) => path === join(watchDir, 'secret.txt') ]
 		});
 		const seenPaths: string[] = [];
-		watcher.on('all', (_event, _stats, path) => seenPaths.push(path));
+		observeEvent(watcher, 'all', (_event, _stats, path) => seenPaths.push(path));
 		const visibleAdd = waitForEvent(watcher, 'add');
 
 		writeFileSync(join(watchDir, 'debug.log'), 'ignored by glob');
@@ -306,7 +307,7 @@ describe('Watchr integration', () => {
 				reject(new Error(`timed out waiting for adds; saw: ${[ ...seenPaths ].join(', ') || '(none)'}`));
 			}, 5000);
 
-			watcher.on('add', (_stats: WatchrStats, targetPath: string) => {
+			observeEvent(watcher, 'add', (_stats: WatchrStats, targetPath: string) => {
 				seenPaths.add(targetPath);
 
 				if (seenPaths.has(fileA) && seenPaths.has(fileB)) {
@@ -328,7 +329,7 @@ describe('Watchr integration', () => {
 		const root = createTempDir();
 		const nested = join(root, 'nested');
 		mkdirSync(nested);
-		const watcher = await createWatcher([ root, nested ], { ignoreInitial: true });
+		const watcher = await createWatcher([ root, nested ], { emitInitial: false });
 		const filePath = join(nested, 'new.txt');
 		const added = waitForEvent(watcher, 'add');
 
@@ -344,9 +345,9 @@ describe('Watchr integration', () => {
 		writeFileSync(fileA, 'a');
 		writeFileSync(fileB, 'b');
 		writeFileSync(other, 'other');
-		const watcher = await createWatcher([ fileA, fileB ], { ignoreInitial: true, renameTimeout: 0 });
+		const watcher = await createWatcher([ fileA, fileB ], { emitInitial: false, renameTimeout: 0 });
 		const changes = new Set<string>();
-		watcher.on('change', (_stats, path) => changes.add(path));
+		observeEvent(watcher, 'change', (_stats, path) => changes.add(path));
 
 		writeFileSync(other, 'unwatched');
 		writeFileSync(fileA, 'updated a');
@@ -358,7 +359,7 @@ describe('Watchr integration', () => {
 
 	it('rejects a non-callable handler from JavaScript callers', () => {
 		const watchDir = createTempDir();
-		expect(() => Reflect.construct(Watchr, [ watchDir, {}, 'not a function' ])).toThrow('handler must be a function');
+		expect(() => Reflect.construct(Watchr, [ watchDir, { handlers: { all: 'not a function' } } ])).toThrow();
 	});
 
 	it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('closes failed startup after a real directory permission error', async () => {
@@ -366,21 +367,21 @@ describe('Watchr integration', () => {
 		const unreadable = join(watchDir, 'unreadable');
 		mkdirSync(unreadable);
 		chmodSync(unreadable, 0);
-		const watcher = new Watchr(watchDir);
+		const watcher = createRecordedWatcher(watchDir);
 		const errors: Error[] = [];
-		watcher.on('error', (error) => errors.push(error));
+		observeEvent(watcher, 'error', (error) => errors.push(error));
 
 		try {
-			await expect(watcher.readyLock).rejects.toMatchObject({ code: 'EACCES' });
-			expect(watcher.isClosed()).toBe(true);
-			expect(errors).toHaveLength(1);
+			await expect(watcher.start()).rejects.toMatchObject({ code: 'EACCES' });
+			expect(watcher.state).toBe('closed');
+			expect(errors).toHaveLength(0);
 		} finally {
 			watcher.close();
 			chmodSync(unreadable, 0o700);
 		}
 
 		const recovered = await createWatcher(watchDir);
-		expect(recovered.isReady()).toBe(true);
+		expect(recovered.state).toBe('watching');
 	});
 
 	it('does not deliver events after close()', async () => {
@@ -388,10 +389,10 @@ describe('Watchr integration', () => {
 		const watcher = await createWatcher(watchDir);
 
 		const observedEvents: string[] = [];
-		watcher.on('all', (event: string, _stats: WatchrStats, targetPath: string) => observedEvents.push(`${event}:${targetPath}`));
+		observeEvent(watcher, 'all', (event: string, _stats: WatchrStats, targetPath: string) => observedEvents.push(`${event}:${targetPath}`));
 
 		watcher.close();
-		expect(watcher.isClosed()).toBe(true);
+		expect(watcher.state).toBe('closed');
 
 		writeFileSync(join(watchDir, 'after-close.txt'), 'should not be observed');
 
@@ -411,12 +412,12 @@ describe('Watchr integration', () => {
 			symlinkSync(actualDir, linkedDir, 'dir');
 			symlinkSync(watchDir, join(watchDir, 'loop'), 'dir');
 			symlinkSync(join(watchDir, 'missing'), join(watchDir, 'dangling'), 'dir');
-			const watcher = new Watchr(watchDir, { renameTimeout: 0, ignore: () => false });
+			const watcher = createRecordedWatcher(watchDir, { emitInitial: true, renameTimeout: 0, ignore: () => false });
 			watchers.push(watcher);
 			const observed = new Set<string>();
-			watcher.on('all', (_event, _stats, path) => observed.add(path));
+			observeEvent(watcher, 'all', (_event, _stats, path) => observed.add(path));
 
-			await watcher.readyLock;
+			await watcher.start();
 			await vi.waitFor(() => expect(observed.has(linkedFile)).toBe(true));
 			expect(observed.has(join(watchDir, 'dangling'))).toBe(false);
 			expect(observed.size).toBeLessThan(30);
@@ -429,12 +430,12 @@ describe('Watchr integration', () => {
 			mkdirSync(actualDir);
 			writeFileSync(join(actualDir, 'inside.txt'), 'content');
 			symlinkSync(actualDir, linkDir, 'dir');
-			const watcher = new Watchr(watchDir, { renameTimeout: 0 });
+			const watcher = createRecordedWatcher(watchDir, { emitInitial: true, renameTimeout: 0 });
 			watchers.push(watcher);
 			const observed: Array<{ path: string, next?: string, symlink: boolean }> = [];
-			watcher.on('all', (_event, stats, path, next) => observed.push({ path, ...(next === undefined ? {} : { next }), symlink: stats.isSymbolicLink() }));
+			observeEvent(watcher, 'all', (_event, stats, path, next) => observed.push({ path, ...(next === undefined ? {} : { next }), symlink: stats.isSymbolicLink() }));
 
-			await watcher.readyLock;
+			await watcher.start();
 			await vi.waitFor(() => expect(observed.some(({ path, next, symlink }) => (path === linkDir || next === linkDir) && symlink)).toBe(true));
 		});
 
@@ -448,11 +449,11 @@ describe('Watchr integration', () => {
 			writeFileSync(regularPath, 'regular');
 			symlinkSync(targetFile, linkPath);
 
-			const watcher = new Watchr(watchDir, { renameTimeout: 0 });
+			const watcher = createRecordedWatcher(watchDir, { emitInitial: true, renameTimeout: 0 });
 			watchers.push(watcher);
 			const added = new Map<string, WatchrStats>();
-			watcher.on('add', (stats, targetPath) => added.set(targetPath, stats));
-			await watcher.readyLock;
+			observeEvent(watcher, 'add', (stats, targetPath) => added.set(targetPath, stats));
+			await watcher.start();
 			await delay(50);
 
 			expect(added.get(linkPath)?.isSymbolicLink()).toBe(true);
@@ -471,11 +472,11 @@ describe('Watchr integration', () => {
 			writeFileSync(targetFile, 'linked content');
 			symlinkSync(targetFile, initialLink);
 
-			const watcher = new Watchr(watchDir, { followSymlinks: false, renameTimeout: 0 });
+			const watcher = createRecordedWatcher(watchDir, { emitInitial: true, followSymlinks: false, renameTimeout: 0 });
 			watchers.push(watcher);
 			const observed: string[] = [];
-			watcher.on('all', (event, _stats, targetPath) => observed.push(`${event}:${targetPath}`));
-			await watcher.readyLock;
+			observeEvent(watcher, 'all', (event, _stats, targetPath) => observed.push(`${event}:${targetPath}`));
+			await watcher.start();
 
 			const liveAdd = waitForEvent(watcher, 'add');
 			symlinkSync(targetFile, liveLink);

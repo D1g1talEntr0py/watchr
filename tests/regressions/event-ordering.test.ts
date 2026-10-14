@@ -17,7 +17,7 @@ type Run = {
  */
 async function runScenario(gap: number): Promise<Run> {
 	const root = createTempRoot('watchr-ordering-');
-	const watcher = await createReadyWatcher(root, { ignoreInitial: true, renameTimeout: 20 });
+	const watcher = await createReadyWatcher(root, { emitInitial: false, renameTimeout: 20 });
 	const { events, dispose } = collectEvents(watcher);
 	const a = join(root, 'a.txt');
 	const b = join(root, 'b.txt');

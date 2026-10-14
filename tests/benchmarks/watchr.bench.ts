@@ -9,6 +9,7 @@ import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs
 import { readdir, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { buildFlat } from './helpers.ts';
 
 type Internals = {
@@ -31,7 +32,16 @@ const { outputFiles: [ bundle ] } = await build({
 	platform: 'node',
 	target: 'esnext'
 });
-const { FileSystem, FileSystemStateManager, Watchr, WatchrStats } = await import(`data:text/javascript;base64,${Buffer.from(bundle!.text).toString('base64')}`) as Internals;
+const bundleRoot = mkdtempSync(fileURLToPath(new URL('./.watchr-bench-', import.meta.url)));
+let internals: Internals;
+try {
+	const bundlePath = join(bundleRoot, 'internals.js');
+	writeFileSync(bundlePath, bundle!.text);
+	internals = await import(pathToFileURL(bundlePath).href) as Internals;
+} finally {
+	rmSync(bundleRoot, { recursive: true, force: true });
+}
+const { FileSystem, FileSystemStateManager, Watchr, WatchrStats } = internals;
 
 const root = mkdtempSync(join(tmpdir(), 'watchr-bench-'));
 const target = join(root, 'target.txt');
@@ -65,9 +75,12 @@ summary(() => {
 		bench('fs.promises.readdir (recursive)', () => readdir(scanRoot, { recursive: true, withFileTypes: true })).baseline();
 		bench('FileSystem.readDirectory', () => FileSystem.readDirectory(scanRoot));
 		bench('new Watchr() until ready', async () => {
-			const watcher = new Watchr(scanRoot, { ignoreInitial: true });
-			await watcher.readyLock;
-			watcher.close();
+			const watcher = new Watchr(scanRoot, { emitInitial: false });
+			try {
+				await watcher.start();
+			} finally {
+				watcher.close();
+			}
 		});
 	});
 });

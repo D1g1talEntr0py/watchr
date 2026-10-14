@@ -5,12 +5,16 @@ import { NodeWatcherEvent, NodeTargetEvent, FileSystemEvent } from './constants'
 import type { Watchr } from './watchr';
 import type { FileRenameHandler } from './file-rename-handler';
 import type { FileSystemStateManager } from './file-system-state-manager';
+import type { WatchrStats } from './watchr-stats';
 import type { DirectoryReadOptions, Event, NodeEventHandler, Path, StateUpdateOptions, NormalizedWatchrOptions, WatchrConfig, WatchIgnore } from './@types/index';
 
 type WatchrEventHooks = {
 	renameHandler: FileRenameHandler;
 	reportError: (error: unknown) => boolean;
 	closeWatchers: (folderPath?: Path, filePath?: Path) => void;
+	isIgnored: (path: Path, ignore: WatchIgnore) => boolean;
+	emitInitial: (event: FileSystemEvent, path: Path, stats: WatchrStats) => void;
+	startupFailure: (error: unknown) => void;
 };
 
 /**
@@ -19,6 +23,9 @@ type WatchrEventHooks = {
  */
 export class FileSystemEventManager {
 	#lock: Promise<void>;
+	readonly #releaseInitialization: () => void;
+	readonly #initial: boolean;
+	#initializing = true;
 	#initialSymlinks: ReadonlySet<Path> | undefined;
 	#flushQueued: boolean;
 	#flushAfterLockScheduled: boolean;
@@ -31,15 +38,13 @@ export class FileSystemEventManager {
 	#directoryStartupScanTimer: ReturnType<typeof setTimeout> | undefined;
 	#lastDirectoryFallbackScanAt: number;
 	readonly #fileSystemPoller: FileSystemStateManager;
-	readonly #watchr: Watchr;
 	readonly #hooks: WatchrEventHooks;
 	readonly #watcher: FSWatcher;
 	readonly #options: NormalizedWatchrOptions;
 	/** Precompiled ignore predicate; falls back to the raw option for configs built without normalization. */
-	readonly #ignore: WatchIgnore | undefined;
+	#ignore: WatchIgnore | undefined;
 	readonly #folderPath: Path;
 	readonly #filePath: Path | undefined;
-	readonly #initials: Event[];
 	readonly #regulars: Set<Path>;
 	readonly #nodeEventHandler: NodeEventHandler;
 	/** Aborted by {@link cleanup} (or by the watcher closing) so in-flight scans cannot feed a stale manager. */
@@ -82,11 +87,12 @@ export class FileSystemEventManager {
 	 * @param hooks Capabilities supplied by the owning watcher
 	 */
 	private constructor(fileSystemPoller: FileSystemStateManager, watchr: Watchr, watcherConfig: WatchrConfig, hooks: WatchrEventHooks) {
-		this.#lock = watchr.readyLock;
+		const gate = Promise.withResolvers<void>();
+		this.#lock = gate.promise;
+		this.#releaseInitialization = gate.resolve;
+		this.#initial = watcherConfig.initial ?? true;
 		this.#fileSystemPoller = fileSystemPoller;
-		this.#watchr = watchr;
 		this.#hooks = hooks;
-		this.#initials = [];
 		this.#regulars = new Set();
 		this.#flushQueued = false;
 		this.#flushAfterLockScheduled = false;
@@ -117,7 +123,14 @@ export class FileSystemEventManager {
 	 * @returns A Promise of a FileSystemEventManager
 	 */
 	static async newInstance(fileSystemPoller: FileSystemStateManager, watchr: Watchr, watcherConfig: WatchrConfig, hooks: WatchrEventHooks): Promise<FileSystemEventManager> {
-		return new FileSystemEventManager(fileSystemPoller, watchr, watcherConfig, hooks).#initializeEvents();
+		const manager = new FileSystemEventManager(fileSystemPoller, watchr, watcherConfig, hooks);
+		watcherConfig.eventManager = manager;
+		try {
+			return await manager.#initializeEvents();
+		} finally {
+			manager.#initializing = false;
+			manager.#releaseInitialization();
+		}
 	}
 
 	/**
@@ -128,15 +141,12 @@ export class FileSystemEventManager {
 		this.#watcher.on(NodeWatcherEvent.CHANGE, this.#watcherChangeHandler);
 		this.#watcher.on(NodeWatcherEvent.ERROR, this.#watcherErrorHandler);
 
-		// "isInitial" => is ignorable via the "ignoreInitial" option
-		const isInitial = !this.#watchr.isReady();
-
 		// Single initial path
 		if (this.#filePath) {
 			// Already polled
 			if (this.#fileSystemPoller.stats.has(this.#filePath)) { return this }
 
-			await this.#onWatcherEvent(NodeTargetEvent.CHANGE, this.#filePath, isInitial);
+			await this.#scanInitialPaths([ this.#filePath ], true);
 		} else {
 			// Multiple initial paths; `readDirectory` applies the ignore matcher, so only the root itself is re-checked.
 			const { directories, files, symlinks } = await FileSystem.readDirectory(this.#folderPath, this.#directoryReadOptions());
@@ -145,7 +155,7 @@ export class FileSystemEventManager {
 			this.#initialSymlinks = symlinks.size === 0 ? undefined : symlinks;
 
 			try {
-				await this.#scanInitialPaths([ ...rootPaths, ...directories, ...files ], isInitial);
+				await this.#scanInitialPaths([ ...rootPaths, ...directories, ...files ], true);
 			} finally {
 				this.#initialSymlinks = undefined;
 			}
@@ -153,7 +163,7 @@ export class FileSystemEventManager {
 
 		if (process.platform === 'win32' && this.#filePath === undefined && !this.#abortSignal.aborted) {
 			this.#rootStatListener = (current: Stats, _previous: Stats): void => {
-				if (current.nlink !== 0 || this.#watchr.isClosed()) { return }
+				if (current.nlink !== 0 || this.#abortSignal.aborted) { return }
 
 				this.#watcher.close();
 				this.#onWatcherChange(NodeTargetEvent.RENAME);
@@ -182,7 +192,7 @@ export class FileSystemEventManager {
 	 * @returns True when the path is ignored
 	 */
 	#isIgnored(targetPath: Path): boolean {
-		return this.#ignore !== undefined && this.#watchr.isIgnored(targetPath, this.#ignore);
+		return this.#ignore !== undefined && this.#hooks.isIgnored(targetPath, this.#ignore);
 	}
 
 	/**
@@ -200,10 +210,10 @@ export class FileSystemEventManager {
 
 	/**
 	 * Polls the initial paths sequentially with blocking stats, yielding to the event loop every few milliseconds.
-	 * A failing path is reported as an error and skipped so one bad entry can never fail the whole scan; the loop
-	 * stops early once the watcher aborts.
+	 * A failing child is reported and skipped; an unavailable original root fails startup. The loop stops once
+	 * the watcher aborts, and recovery inventories remain live scans.
 	 * @param targetPaths The paths discovered for the initial scan
-	 * @param isInitial Whether the resulting events are ignorable via `ignoreInitial`
+	 * @param isInitial Whether these paths belong to an attachment inventory scan
 	 */
 	async #scanInitialPaths(targetPaths: Path[], isInitial: boolean): Promise<void> {
 		const signal = this.#abortSignal;
@@ -221,10 +231,16 @@ export class FileSystemEventManager {
 			// Already polled
 			if (this.#fileSystemPoller.stats.has(targetPath)) { continue }
 
+			const requiredRoot = this.#initial && targetPath === (this.#filePath ?? this.#folderPath);
 			try {
 				await this.#onWatcherEvent(NodeTargetEvent.CHANGE, targetPath, isInitial);
+				if (signal.aborted) { return }
+				if (requiredRoot && !this.#fileSystemPoller.stats.has(targetPath)) {
+					throw new Error('Configured root is unavailable during initial scan', { cause: { targetPath } });
+				}
 			} catch (error: unknown) {
 				if (signal.aborted) { return }
+				if (requiredRoot) { throw error }
 
 				this.#hooks.reportError(new Error('Initial scan skipped path.', { cause: error }));
 			}
@@ -236,6 +252,8 @@ export class FileSystemEventManager {
 	 */
 	cleanup(): void {
 		this.#abortController.abort();
+		this.#ignore = undefined;
+		this.#regulars.clear();
 
 		if (this.#directoryStartupScanTimer !== undefined) {
 			clearTimeout(this.#directoryStartupScanTimer);
@@ -276,16 +294,13 @@ export class FileSystemEventManager {
 
 	/**
 	 * Acquires a lock for the current event batch
-	 * @param initials Initial events captured for this batch
 	 * @param regulars Regular target paths captured for this batch
 	 * @returns A Promise that resolves when the lock is acquired
 	 */
-	async #getLock(initials: Event[], regulars: Set<Path>): Promise<void> {
-		const includeInitials = !this.#options.ignoreInitial && initials.length > 0;
+	async #getLock(regulars: Set<Path>): Promise<void> {
+		if (regulars.size === 0 || this.#abortSignal.aborted) { return }
 
-		if (!includeInitials && regulars.size === 0) { return }
-
-		if (!includeInitials && regulars.size === 1) {
+		if (regulars.size === 1) {
 			const singleTargetPath: Path | undefined = regulars.values().next().value;
 
 			if (singleTargetPath === undefined) { return }
@@ -300,7 +315,7 @@ export class FileSystemEventManager {
 		}
 
 		const regularEvents = await this.#populateEvents(regulars);
-		const allEvents = includeInitials ? [ ...initials, ...regularEvents ] : regularEvents;
+		const allEvents = regularEvents;
 
 		if (allEvents.length === 0) { return }
 
@@ -325,13 +340,12 @@ export class FileSystemEventManager {
 	 * Flushes the current event batch immediately.
 	 */
 	#flushImmediate() {
-		if (this.#watchr.isClosed()) { return }
+		if (this.#abortSignal.aborted) { return }
 
-		const initials = this.#initials.splice(0);
 		const regulars = new Set(this.#regulars);
 		this.#regulars.clear();
-		this.#lock = this.#getLock(initials, regulars).catch((error: unknown) => {
-			this.#hooks.reportError(error);
+		this.#lock = this.#getLock(regulars).catch((error: unknown) => {
+			if (!this.#abortSignal.aborted) { this.#hooks.reportError(error) }
 		});
 	}
 
@@ -341,15 +355,22 @@ export class FileSystemEventManager {
 	 */
 	#generateNodeEventHandler() {
 		return async (_event: NodeTargetEvent, targetPath: Path = '', isInitial: boolean = false): Promise<void> => {
+			if (this.#abortSignal.aborted) { return }
 			if (isInitial) {
-				// Poll immediately
-				await this.#populateEvents([ targetPath ], this.#initials, this.#initialSymlinks?.has(targetPath) === true ? this.#initialSymlinkStatOptions : this.#initialStatOptions);
+				const events = await this.#populateEvents([ targetPath ], [], this.#initialSymlinks?.has(targetPath) === true ? this.#initialSymlinkStatOptions : this.#initialStatOptions);
+				if (this.#abortSignal.aborted) { return }
+				if (!this.#initial) {
+					this.#onTargetEvents(events);
+				} else if (this.#options.emitInitial === true) {
+					for (const [ type, path, stats ] of events) {
+						if (this.#abortSignal.aborted) { break }
+						this.#hooks.emitInitial(type, path, stats);
+					}
+				}
 			} else {
-				// Poll later
 				this.#regulars.add(targetPath);
+				this.#scheduleFlushAfterLock();
 			}
-
-			this.#scheduleFlushAfterLock();
 		};
 	}
 
@@ -451,6 +472,7 @@ export class FileSystemEventManager {
 	 * @param events The target events to handle
 	 */
 	#onTargetEvents(events: Event[]) {
+		if (this.#abortSignal.aborted) { return }
 		// Same-path stat transitions (e.g. atomic-save inode swaps) already resolve as a single CHANGE;
 		// exclude those paths from rename-sibling correlation so a co-batched temp-file unlink/add doesn't
 		// also emit a redundant RENAME for the same target. Collect the full set first, then process the
@@ -462,6 +484,7 @@ export class FileSystemEventManager {
 		}
 
 		for (const [ targetEvent, targetPath, stats ] of events) {
+			if (this.#abortSignal.aborted) { return }
 			if (targetEvent === FileSystemEvent.UNLINK && this.#filePath === undefined) {
 				this.#hooks.closeWatchers(dirname(targetPath), targetPath);
 			} else if (targetEvent === FileSystemEvent.UNLINK_DIR && this.#filePath === undefined) {
@@ -496,7 +519,7 @@ export class FileSystemEventManager {
 	 * @param targetName The target name of the event
 	 */
 	#onWatcherChange(event: NodeTargetEvent = NodeTargetEvent.CHANGE, targetName: string | null = '') {
-		if (this.#watchr.isClosed()) { return }
+		if (this.#abortSignal.aborted) { return }
 
 		if (this.#filePath !== undefined) {
 			if (this.#isIgnored(this.#filePath)) { return }
@@ -628,7 +651,7 @@ export class FileSystemEventManager {
 	 * @param event The watcher change event.
 	 */
 	async #runDirectoryFallbackScan(event: NodeTargetEvent): Promise<void> {
-		if (this.#watchr.isClosed() || this.#abortSignal.aborted) { return }
+		if (this.#abortSignal.aborted) { return }
 
 		const targetPaths = await this.#collectSnapshotDirectoryTargets();
 
@@ -700,7 +723,12 @@ export class FileSystemEventManager {
 			return;
 		}
 
-		this.#hooks.reportError(this.#sanitizeWatcherError(error));
+		const sanitized = this.#sanitizeWatcherError(error);
+		if (this.#initializing && this.#initial) {
+			this.#hooks.startupFailure(sanitized);
+		} else if (!this.#abortSignal.aborted) {
+			this.#hooks.reportError(sanitized);
+		}
 	}
 
 	/**

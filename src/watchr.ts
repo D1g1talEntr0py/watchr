@@ -1,15 +1,14 @@
 import { watch } from 'node:fs';
-import { EventEmitter } from 'node:events';
 import { resolve, dirname, basename, matchesGlob } from 'node:path';
 import { FileSystem } from './file-system';
 import { castError, noop, uniqueSortedArray } from './utils';
 import { FileRenameHandler } from './file-rename-handler';
 import { LockResolver } from './lock-resolver';
 import { WatchrStats } from './watchr-stats';
-import { FileEvent, DirectoryEvent, FileSystemEvent, WatcherEvent, renameTimeout, statTimeout, fallbackScanInterval } from './constants';
+import { FileEvent, DirectoryEvent, FileSystemEvent, renameTimeout, statTimeout, fallbackScanInterval } from './constants';
 import { FileSystemEventManager } from './file-system-event-manager';
 import type { WatchOptions } from 'node:fs';
-import type { Handler, WatchIgnore, IgnoreMatcher, Path, WatchrOptions, WatchrEventMap, NormalizedWatchrOptions, WatchrConfig, AsyncCallable, Closable, NodeError } from './@types/index';
+import type { WatchIgnore, IgnoreMatcher, Path, WatchrOptions, WatchrEventMap, WatchrEvent, WatchrHandlers, WatchrState, NormalizedWatchrOptions, WatchrConfig, AsyncCallable, Closable, NodeError } from './@types/index';
 
 type NativeIgnoreEntry = string | RegExp | ((filename: string) => boolean);
 /** A root whose watcher died and is awaiting re-attachment. */
@@ -33,74 +32,55 @@ function isNativeIgnoreEntry(entry: unknown): entry is NativeIgnoreEntry {
  * Watches files and directories for changes.
  * Created primarily for build tooling.
  */
-class Watchr extends EventEmitter<WatchrEventMap> implements Closable {
-	#closed: boolean;
-	#ready: boolean;
+class Watchr implements Closable {
+	#state: WatchrState = 'idle';
 	#watchersLock: Promise<void>;
 	readonly #watchersRestorable: Map<Path, RestorableWatcher>;
 	readonly #abortController: AbortController;
 	readonly #abortSignal: AbortSignal;
-	readonly #readyLock: Promise<void>;
-	readonly #readyReject: (reason?: unknown) => void;
+	#startPromise: Promise<this> | undefined;
+	#startReject: (reason?: unknown) => void = noop;
+	readonly #target: Path[];
+	readonly #options: WatchrOptions;
+	readonly #handlers: WatchrHandlers = {};
 	readonly #renameHandler: FileRenameHandler;
 	readonly #roots: Set<Path>;
 	readonly #watchers: Map<Path, WatchrConfig[]>;
-	readonly #allEventHandlers = new WeakSet<Handler>();
-	static readonly FileEvent: typeof FileEvent = FileEvent;
-	static readonly DirectoryEvent: typeof DirectoryEvent = DirectoryEvent;
-	static readonly Event: typeof WatcherEvent = WatcherEvent;
 	/** Delays between root restore attempts; the last value repeats until the root reappears or the watcher closes. */
 	static readonly #restoreBackoffMs: readonly number[] = [ 100, 250, 500, 1000, 2000 ];
 
 	/**
+	 * Configures an idle watcher. Call `start()` to begin watching.
 	 * @param target The target files or directories to watch
 	 * @param options The options for the watcher
-	 * @param handler The handler to call when a change is detected
 	 */
-	constructor(target: Path[] | Path = [], options: WatchrOptions = {}, handler?: Handler) {
-		super();
-
+	constructor(target: Path[] | Path, options: WatchrOptions = {}) {
+		if (arguments.length > 2) { throw new Error('Only target and options are accepted.') }
 		if (process.platform === 'win32' && !platformWarningEmitted) {
 			platformWarningEmitted = true;
 			Watchr.#warn('Windows support is best-effort (Tier 2).', 'WATCHR_PLATFORM_TIER2', 'Use WSL for guaranteed behavior.');
 		}
 
-		Watchr.#validateWatchArguments(options, handler);
-		this.#closed = false;
-		this.#ready = false;
+		Watchr.#validateWatchArguments(target, options);
 		this.#abortController = new AbortController();
 		this.#abortSignal = this.#abortController.signal;
-		let rejectReady: (reason?: unknown) => void = noop;
-		this.#readyLock = new Promise((resolve, reject) => {
-			rejectReady = reject;
-			const cleanup = (): void => {
-				this.off(WatcherEvent.READY, onReady);
-				this.off(WatcherEvent.CLOSE, onClose);
-			};
-
-			const onReady = (): void => {
-				cleanup();
-				resolve();
-			};
-
-			const onClose = (): void => {
-				cleanup();
-				reject(new Error('watcher closed before becoming ready.'));
-			};
-
-			this.on(WatcherEvent.READY, onReady);
-			this.on(WatcherEvent.CLOSE, onClose);
-		});
-		this.#readyReject = rejectReady;
-		this.#readyLock.catch(noop);
+		this.#target = Array.isArray(target) ? [ ...target ] : [ target ];
+		const { handlers, ...watchOptions } = options;
+		this.#options = watchOptions;
+		for (const name of Object.keys(handlers ?? {}) as (keyof WatchrHandlers)[]) {
+			const entry = handlers![name];
+			if (entry !== undefined) { Object.assign(this.#handlers, { [name]: typeof entry === 'function' ? { handler: entry } : { ...entry } }) }
+		}
 		this.#roots = new Set();
 		this.#renameHandler = new FileRenameHandler(this.#emitEvent.bind(this), this.#error.bind(this), new LockResolver({ onError: (error) => void this.#error(error) }));
 		this.#watchers = new Map();
 		this.#watchersLock = Promise.resolve();
 		this.#watchersRestorable = new Map();
-		this.on(WatcherEvent.CLOSE, () => this.#abortController.abort());
-		// Initialize watching with proper error handling
-		this.#watch(Array.isArray(target) ? target : [ target ], options, handler).catch((error) => this.#error(error));
+	}
+
+	/** The current read-only lifecycle state. */
+	get state(): WatchrState {
+		return this.#state;
 	}
 
 	/**
@@ -112,11 +92,38 @@ class Watchr extends EventEmitter<WatchrEventMap> implements Closable {
 	}
 
 	/**
-	 * Returns the ready lock for the watcher
-	 * @returns The ready lock for the watcher
+	 * Starts watching the configured paths, delivering requested initial inventory before resolving.
+	 * Repeated calls share the same initialization promise; closed watchers cannot be restarted.
+	 * @returns A promise that resolves after watcher attachment and the initial scan, or rejects if startup fails or is cancelled.
 	 */
-	get readyLock(): Promise<void> {
-		return this.#readyLock;
+	start(): Promise<this> {
+		if (this.#state === 'closed') { return Promise.reject(new Error('watcher is closed.')) }
+		if (this.#startPromise !== undefined) { return this.#startPromise }
+
+		const { promise, resolve, reject } = Promise.withResolvers<this>();
+		this.#startPromise = promise;
+		this.#startReject = reject;
+		this.#state = 'starting';
+		void this.#watch(this.#target, this.#options).then(() => {
+			if (this.#state === 'closed') { return }
+			this.#state = 'watching';
+			this.#startReject = noop;
+			resolve(this);
+		}, (error: unknown) => this.#failStartup(error));
+
+		return promise;
+	}
+
+	/**
+	 * Rejects fatal startup failures once and releases all resources.
+	 * @param error The startup failure
+	 */
+	#failStartup(error: unknown): void {
+		if (this.#state !== 'starting') { return }
+
+		this.#startReject(castError(error));
+		this.#startReject = noop;
+		this.close();
 	}
 
 	/**
@@ -136,21 +143,13 @@ class Watchr extends EventEmitter<WatchrEventMap> implements Closable {
 	}
 
 	/**
-	 * Checks if the watcher is closed
-	 * @returns True if the watcher is closed, false otherwise
-	 */
-	isClosed(): boolean {
-		return this.#closed;
-	}
-
-	/**
 	 * Checks if the target path is ignored.
 	 * Pass the precompiled `ignoreMatcher` from normalized options on hot paths; a raw ignore option is compiled per call.
 	 * @param targetPath The target path to check
 	 * @param ignore The ignore option or precompiled matcher to use
 	 * @returns True if the target path is ignored, false otherwise
 	 */
-	isIgnored(targetPath: Path, ignore?: WatchIgnore | IgnoreMatcher): boolean {
+	#isIgnored(targetPath: Path, ignore?: WatchIgnore | IgnoreMatcher): boolean {
 		if (ignore === undefined) { return false }
 
 		try {
@@ -171,9 +170,9 @@ class Watchr extends EventEmitter<WatchrEventMap> implements Closable {
 	static #compileIgnore(ignore: WatchIgnore | undefined) {
 		if (ignore === undefined) { return undefined }
 
-		if (isNativeIgnoreEntry(ignore)) { return Watchr.#compileIgnoreEntry(ignore, false) }
+		if (isNativeIgnoreEntry(ignore)) { return Watchr.#compileIgnoreEntry(ignore) }
 
-		const matchers = ignore.map((entry) => Watchr.#compileIgnoreEntry(entry, true));
+		const matchers = ignore.map((entry) => Watchr.#compileIgnoreEntry(entry));
 
 		if (matchers.length === 1) { return matchers[0]! }
 
@@ -187,15 +186,13 @@ class Watchr extends EventEmitter<WatchrEventMap> implements Closable {
 	}
 
 	/**
-	 * Compiles one ignore entry. Strings and RegExps match the full path or its basename; a top-level callback receives
-	 * the full path only, while a callback nested in an array is also offered the basename (native `fs.watch` semantics).
+	 * Compiles one ignore entry. Callbacks receive only the full absolute path.
 	 * @param entry The ignore entry to compile.
-	 * @param nested Whether the entry came from an array.
 	 * @returns The predicate for the entry.
 	 */
-	static #compileIgnoreEntry(entry: NativeIgnoreEntry, nested: boolean): IgnoreMatcher {
+	static #compileIgnoreEntry(entry: NativeIgnoreEntry): IgnoreMatcher {
 		if (typeof entry === 'function') {
-			return nested ? (targetPath: Path) => entry(targetPath) || entry(basename(targetPath)) : entry;
+			return entry;
 		}
 
 		if (typeof entry === 'string') {
@@ -221,28 +218,26 @@ class Watchr extends EventEmitter<WatchrEventMap> implements Closable {
 	}
 
 	/**
-	 * Checks if the watcher is ready
-	 * @returns True if the watcher is ready, false otherwise
-	 */
-	isReady(): boolean {
-		return this.#ready;
-	}
-
-	/**
 	 * Closes the watcher
 	 */
 	close(): void {
-		if (this.isClosed()) { return }
+		if (this.#state === 'closed') { return }
 
-		this.#closed = true;
+		const closeEntry = this.#handlers.close;
+		this.#state = 'closed';
+		for (const name of Object.keys(this.#handlers) as (keyof WatchrHandlers)[]) { delete this.#handlers[name] }
+		delete this.#options.ignore;
 		this.#abortController.abort();
-		this.#readyReject(new Error('watcher closed before becoming ready.'));
+		this.#startReject(new Error('watcher closed before becoming ready.'));
+		this.#startReject = noop;
 		this.#renameHandler.reset();
 		this.#roots.clear();
-		this.watchersClose();
+		this.#watchersClose();
 		this.#clearRestorableWatchers();
-
-		this.emit(WatcherEvent.CLOSE);
+		if (closeEntry !== undefined) {
+			const handler = typeof closeEntry === 'function' ? closeEntry : closeEntry.handler;
+			this.#invoke(handler, [], 'close');
+		}
 	}
 
 	/**
@@ -251,6 +246,8 @@ class Watchr extends EventEmitter<WatchrEventMap> implements Closable {
 	#clearRestorableWatchers() {
 		for (const restorable of this.#watchersRestorable.values()) {
 			if (restorable.timer !== undefined) { clearTimeout(restorable.timer) }
+			delete restorable.config.options.ignore;
+			delete restorable.config.options.ignoreMatcher;
 		}
 
 		this.#watchersRestorable.clear();
@@ -264,31 +261,21 @@ class Watchr extends EventEmitter<WatchrEventMap> implements Closable {
 	}
 
 	/**
-	 * Emits an error event. A throwing (or missing) `error` listener is reported through `process.emitWarning`
+	 * Delivers an error. A throwing (or missing) `error` callback is reported through `process.emitWarning`
 	 * so watcher-internal failures can never surface as uncaught exceptions.
-	 * Consumers should listen for `error` rather than call this.
+	 * Async callback failures after close are reported as warnings.
 	 * @param exception The error to emit
 	 * @returns True if the event was delivered to a listener, false otherwise
 	 * @internal
 	 */
-	#error(exception: unknown) {
-		if (this.isClosed()) { return false }
-
+	#error(exception: unknown): boolean {
 		const error = castError(exception);
-
-		try {
-			return this.emit(WatcherEvent.ERROR, error);
-		} catch (listenerError: unknown) {
-			if (this.listenerCount(WatcherEvent.ERROR) === 0) {
-				Watchr.#warn(error.message, 'WATCHR_UNHANDLED_ERROR', 'Attach an "error" listener to receive watcher errors.', error);
-			} else {
-				const thrown = castError(listenerError);
-
-				Watchr.#warn(thrown.message, 'WATCHR_UNHANDLED_ERROR', 'An "error" listener threw while handling a watcher error.', thrown);
-			}
-
+		if (this.#state === 'closed' || this.#handlers.error === undefined) {
+			Watchr.#warn(error.message, 'WATCHR_UNHANDLED_ERROR', 'No active error handler can receive this failure.', error);
 			return false;
 		}
+		this.#dispatch('error', error);
+		return true;
 	}
 
 	/**
@@ -311,10 +298,12 @@ class Watchr extends EventEmitter<WatchrEventMap> implements Closable {
 	 * @param targetPath The target path of the event
 	 * @param stats The stats to deliver with the event (previous stats for removals, current stats otherwise)
 	 * @param targetPathNext The next target path of the event
+	 * @param initial Whether this is initial inventory
 	 * @internal
 	 */
-	#emitEvent(event: FileSystemEvent, targetPath: Path, stats: WatchrStats, targetPathNext?: Path) {
-		if (this.isClosed()) { return }
+	#emitEvent(event: FileSystemEvent, targetPath: Path, stats: WatchrStats, targetPathNext?: Path, initial = false): void {
+		if (this.#state === 'closed') { return }
+		let payload: WatchrEvent;
 
 		if (Watchr.#isRenameEvent(event)) {
 			if (targetPathNext === undefined) {
@@ -323,14 +312,12 @@ class Watchr extends EventEmitter<WatchrEventMap> implements Closable {
 				return;
 			}
 
-			this.#emitSafely(WatcherEvent.ALL, event, stats, targetPath, targetPathNext);
-			this.#emitSafely(event, stats, targetPath, targetPathNext);
-
-			return;
+			payload = Object.freeze({ type: event, from: targetPath, to: targetPathNext, stats, initial: false });
+		} else {
+			payload = Object.freeze({ type: event, path: targetPath, stats, initial });
 		}
-
-		this.#emitSafely(WatcherEvent.ALL, event, stats, targetPath);
-		this.#emitSafely(event, stats, targetPath);
+		this.#dispatch('all', payload);
+		this.#dispatch(payload.type, payload);
 	}
 
 	/**
@@ -344,15 +331,38 @@ class Watchr extends EventEmitter<WatchrEventMap> implements Closable {
 
 	/**
 	 * Emits an event, routing listener exceptions to `error` instead of letting them escape a timer tick.
-	 * @param eventName The event to emit
-	 * @param args The event arguments
+	 * @param name The configured handler name
+	 * @param event The event payload
 	 */
-	#emitSafely<K extends keyof WatchrEventMap>(eventName: K, ...args: WatchrEventMap[K]): void {
+	#dispatch<K extends Exclude<keyof WatchrEventMap, 'close'>>(name: K, event: WatchrEventMap[K]): void {
+		if (this.#state === 'closed') { return }
+		const entry = this.#handlers[name];
+		if (entry === undefined) { return }
+		const handler = typeof entry === 'function' ? entry : entry.handler;
+		if (typeof entry !== 'function' && entry.once === true) { delete this.#handlers[name] }
+		this.#invoke(handler as (event: WatchrEventMap[K]) => void | PromiseLike<void>, [ event ], name === 'error' ? 'error' : undefined);
+	}
+
+	/**
+	 * Invokes a callback and observes failures without extending a filesystem barrier.
+	 * @param handler The callback to invoke
+	 * @param args The callback arguments
+	 * @param warningHandler The handler name when failures must bypass the error callback
+	 */
+	#invoke<Args extends unknown[]>(handler: (...args: Args) => void | PromiseLike<void>, args: Args, warningHandler?: 'error' | 'close'): void {
+		const report = (exception: unknown, failureMode: 'throw' | 'rejection'): void => {
+			const error = castError(exception);
+			if (warningHandler !== undefined) {
+				Watchr.#warn(error.message, 'WATCHR_UNHANDLED_ERROR', `The "${warningHandler}" handler ${failureMode === 'throw' ? 'threw synchronously' : 'returned a rejected promise'}.`, error);
+			} else {
+				this.#error(error);
+			}
+		};
 		try {
-			// Node's `emit` defers its argument type behind a conditional on `K`; the map already constrains `args`.
-			(this.emit as (eventName: K, ...args: WatchrEventMap[K]) => boolean)(eventName, ...args);
+			const result = handler(...args);
+			if (result !== undefined) { void Promise.resolve(result).catch((error: unknown) => report(error, 'rejection')) }
 		} catch (error: unknown) {
-			this.#error(new Error('Event listener threw.', { cause: error }));
+			report(error, 'throw');
 		}
 	}
 
@@ -361,10 +371,10 @@ class Watchr extends EventEmitter<WatchrEventMap> implements Closable {
 	 * @param folderPath The folder path to close watchers for
 	 * @param filePath The file path to close watchers for
 	 */
-	watchersClose(folderPath?: Path, filePath?: Path): void {
+	#watchersClose(folderPath?: Path, filePath?: Path): void {
 		if (!folderPath) {
 			for (const folderPath of [ ...this.#watchers.keys() ]) {
-				this.watchersClose(folderPath, filePath);
+				this.#watchersClose(folderPath, filePath);
 			}
 		} else {
 			// It's important to clone the array, as items will be deleted from it
@@ -372,18 +382,6 @@ class Watchr extends EventEmitter<WatchrEventMap> implements Closable {
 				if (!filePath || watcherConfig.filePath === filePath) { this.#watcherClose(watcherConfig) }
 			}
 		}
-	}
-
-	/**
-	 * Sets the watcher to the ready state
-	 * @returns true if there were any listeners for the ready event, false otherwise
-	 */
-	#setReady() {
-		if (this.isClosed() || this.isReady()) { return false }
-
-		this.#ready = true;
-
-		return this.emit(WatcherEvent.READY);
 	}
 
 	/**
@@ -411,14 +409,14 @@ class Watchr extends EventEmitter<WatchrEventMap> implements Closable {
 	 * @param restorable The restore bookkeeping for the root
 	 */
 	async #watcherRestore(rootPath: Path, restorable: RestorableWatcher): Promise<void> {
-		if (this.isClosed() || this.#watchersRestorable.get(rootPath) !== restorable) { return }
+		if (this.#state === 'closed' || this.#watchersRestorable.get(rootPath) !== restorable) { return }
 
-		const { options, handler } = restorable.config;
+		const { options } = restorable.config;
 
 		try {
-			await this.watchPath(rootPath, options, handler);
+			await this.#watchPath(rootPath, options, false);
 		} catch (error: unknown) {
-			if (this.isClosed() || this.#watchersRestorable.get(rootPath) !== restorable) { return }
+			if (this.#abortSignal.aborted || this.#watchersRestorable.get(rootPath) !== restorable) { return }
 
 			if (!Watchr.#isMissingPathError(error)) { this.#error(error) }
 
@@ -454,12 +452,16 @@ class Watchr extends EventEmitter<WatchrEventMap> implements Closable {
 			const eventManager = await FileSystemEventManager.newInstance(this.#renameHandler.fileStateManager, this, config, {
 				renameHandler: this.#renameHandler,
 				reportError: (error) => this.#error(error),
-				closeWatchers: (folderPath?: Path, filePath?: Path) => this.watchersClose(folderPath, filePath)
+				closeWatchers: (folderPath?: Path, filePath?: Path) => this.#watchersClose(folderPath, filePath),
+				isIgnored: (path, ignore) => this.#isIgnored(path, ignore),
+				emitInitial: (event, path, stats) => this.#emitEvent(event, path, stats, undefined, true),
+				startupFailure: (error) => this.#failStartup(error)
 			});
 			config.eventManager = eventManager;
 
 			return eventManager;
 		} catch (error: unknown) {
+			config.eventManager?.cleanup();
 			this.#removeWatcherConfig(config);
 			config.watcher.close();
 			throw error;
@@ -483,27 +485,26 @@ class Watchr extends EventEmitter<WatchrEventMap> implements Closable {
 	 * Watches a directory for changes
 	 * @param folderPath The path of the folder to watch
 	 * @param options The options for the watcher
-	 * @param handler The handler to call when changes are detected
+	 * @param initial Whether this attachment belongs to initial startup
 	 * @param filePath The path of the file to watch (if any)
 	 * @returns A promise that resolves when the watcher is active
 	 */
-	async #watchDirectory(folderPath: Path, options: NormalizedWatchrOptions, handler?: Handler, filePath?: Path) {
-		if (this.isClosed() || this.isIgnored(folderPath, options.ignoreMatcher)) { return }
+	async #watchDirectory(folderPath: Path, options: NormalizedWatchrOptions, initial: boolean, filePath?: Path) {
+		if (this.#state === 'closed') { return }
 		const watchOptions = this.#toNodeWatchOptions(options);
 
 		// Node.js 20.16+ supports recursive watching natively on all platforms
 		return this.#synchronizeWatchers(async () => {
-			if (this.isClosed() || this.#abortSignal.aborted) { return }
+			if (this.#abortSignal.aborted) { return }
 
 			const config: WatchrConfig = {
 				watcher: watch(folderPath, { ...watchOptions, signal: this.#abortSignal }, () => {}),
 				options,
-				folderPath
+				folderPath,
+				initial
 			};
 
 			if (filePath !== undefined) { config.filePath = filePath }
-
-			if (handler !== undefined) { config.handler = handler }
 
 			await this.#addWatcher(config);
 		});
@@ -528,28 +529,27 @@ class Watchr extends EventEmitter<WatchrEventMap> implements Closable {
 	 * Uses recursive parent watching on macOS so FSEvents observes child-content changes rather than only directory changes.
 	 * @param filePath The path of the file to watch
 	 * @param options The options for the watcher
-	 * @param handler The handler to call when changes are detected
+	 * @param initial Whether this attachment belongs to initial startup
 	 * @returns A promise that resolves when the watcher is active
 	 */
-	async #watchFile(filePath: Path, options: NormalizedWatchrOptions, handler?: Handler) {
-		if (this.isClosed() || this.isIgnored(filePath, options.ignoreMatcher)) { return }
+	async #watchFile(filePath: Path, options: NormalizedWatchrOptions, initial: boolean) {
+		if (this.#state === 'closed') { return }
 
 		const folderPath = dirname(filePath);
 		const fileWatchOptions: NormalizedWatchrOptions = { ...options, recursive: process.platform === 'darwin' };
 		const watchOptions = this.#toNodeWatchOptions(fileWatchOptions);
 
 		return this.#synchronizeWatchers(async () => {
-			if (this.isClosed() || this.#abortSignal.aborted) { return }
+			if (this.#abortSignal.aborted) { return }
 
 			const config: WatchrConfig = {
 				// Watch the parent directory so atomic-save inode replacement keeps emitting events for the target file.
 				watcher: watch(folderPath, { ...watchOptions, signal: this.#abortSignal }, () => {}),
 				options: fileWatchOptions,
 				folderPath,
-				filePath
+				filePath,
+				initial
 			};
-
-			if (handler !== undefined) { config.handler = handler }
 
 			await this.#addWatcher(config);
 		});
@@ -559,13 +559,12 @@ class Watchr extends EventEmitter<WatchrEventMap> implements Closable {
 	 * Watches multiple paths for changes
 	 * @param targetPaths The paths to watch
 	 * @param options The options for the watcher
-	 * @param handler The handler to call when changes are detected
 	 * @returns A promise that resolves when all watchers are active
 	 */
-	async #watchPaths(targetPaths: Path[], options: WatchrOptions, handler: Handler = noop) {
-		if (this.isClosed() || this.#abortSignal.aborted) { return }
+	async #watchPaths(targetPaths: Path[], options: WatchrOptions) {
+		if (this.#abortSignal.aborted) { return }
 
-		if (targetPaths.length === 1) { return this.watchPath(targetPaths[0]!, options, handler) }
+		if (targetPaths.length === 1) { return this.#watchPath(targetPaths[0]!, options) }
 
 		// Resolve, sort, and deduplicate once so ancestor checks use canonical paths.
 		targetPaths = uniqueSortedArray(targetPaths.map((targetPath) => resolve(targetPath)));
@@ -594,11 +593,11 @@ class Watchr extends EventEmitter<WatchrEventMap> implements Closable {
 			// Watching serially
 			for (let i = 0; i < length; i++) {
 				if (this.#abortSignal.aborted) { return }
-				await this.watchPath(targetPaths[i]!, options, handler);
+				await this.#watchPath(targetPaths[i]!, options);
 			}
 		} else {
 			// All paths are about separate subtrees, so we can start watching in parallel safely
-			await Promise.all(targetPaths.map((targetPath) => this.#abortSignal.aborted ? Promise.resolve() : this.watchPath(targetPath, options, handler)));
+			await Promise.all(targetPaths.map((targetPath) => this.#abortSignal.aborted ? Promise.resolve() : this.#watchPath(targetPath, options)));
 		}
 	}
 
@@ -606,35 +605,35 @@ class Watchr extends EventEmitter<WatchrEventMap> implements Closable {
 	 * Watches a path for changes
 	 * @param targetPath The path to watch
 	 * @param options The options for the watcher; defaults are applied and the ignore option compiled here
-	 * @param handler The handler to call when changes are detected
+	 * @param initial Whether this attachment belongs to initial startup
 	 * @returns A promise that resolves when the watcher is active
 	 */
-	async watchPath(targetPath: Path, options: WatchrOptions, handler?: Handler): Promise<void> {
-		if (this.isClosed()) { return }
+	async #watchPath(targetPath: Path, options: WatchrOptions, initial = true): Promise<void> {
+		if (this.#state === 'closed') { return }
 
 		targetPath = resolve(targetPath);
 		const normalizedOptions = Watchr.#normalizeWatchOptions(options);
 
-		if (this.isIgnored(targetPath, normalizedOptions.ignoreMatcher)) { return }
+		if (this.#isIgnored(targetPath, normalizedOptions.ignoreMatcher)) { return }
 
-		const stats = await FileSystem.getStats(targetPath, { timeout: normalizedOptions.statTimeout });
+		const stats = await FileSystem.getStats(targetPath, { signal: this.#abortSignal });
 
-		if (this.isClosed() || this.#abortSignal.aborted) { return }
+		if (this.#abortSignal.aborted) { return }
 
 		if (!stats) {
 			// Double-check if closed after async operation to avoid race condition during cleanup
 			// The abort signal might not be set yet due to event listener timing, so also check this.closed directly
-			if (this.#closed || this.#abortSignal.aborted) { return }
+			if (this.#abortSignal.aborted) { return }
 
 			throw new Error('Path not found');
 		}
 
 		if (stats.isFile()) {
-			return this.#watchFile(targetPath, normalizedOptions, handler);
+			return this.#watchFile(targetPath, normalizedOptions, initial);
 		} else if (stats.isDirectory()) {
-			return this.#watchDirectory(targetPath, normalizedOptions, handler);
+			return this.#watchDirectory(targetPath, normalizedOptions, initial);
 		} else {
-			this.#error('Target path type is not supported');
+			throw new Error('Target path type is not supported');
 		}
 	}
 
@@ -642,39 +641,13 @@ class Watchr extends EventEmitter<WatchrEventMap> implements Closable {
 	 * Watches a set of paths for changes
 	 * @param target The paths to watch
 	 * @param options The options for the watcher
-	 * @param handler The handler to call when changes are detected
 	 * @returns A promise that resolves when all watchers are active
 	 */
-	async #watch(target: Path[], options: WatchrOptions, handler?: Handler) {
-		if (this.isClosed()) { return }
+	async #watch(target: Path[], options: WatchrOptions): Promise<void> {
+		if (this.#state === 'closed') { return }
 
 		for (const targetPath of target) { this.#roots.add(resolve(targetPath)) }
-
-		try {
-			await this.#watchPaths(target, options, handler);
-		} catch (error: unknown) {
-			this.#readyReject(error);
-			// Report before closing: `error()` is a no-op once the watcher is closed.
-			this.#error(error);
-			this.close();
-
-			return;
-		}
-
-		if (this.isClosed()) { return }
-
-		if (handler !== undefined && !this.#allEventHandlers.has(handler)) {
-			this.#allEventHandlers.add(handler);
-			this.on(WatcherEvent.ALL, (...args: Parameters<Handler>) => {
-				try {
-					handler(...args);
-				} catch (error: unknown) {
-					this.#error(error);
-				}
-			});
-		}
-
-		this.#setReady();
+		await this.#watchPaths(target, options);
 	}
 
 	/**
@@ -686,7 +659,11 @@ class Watchr extends EventEmitter<WatchrEventMap> implements Closable {
 		config.watcher.close();
 		this.#removeWatcherConfig(config);
 
-		if (this.isClosed()) { return }
+		if (this.#state === 'closed') {
+			delete config.options.ignore;
+			delete config.options.ignoreMatcher;
+			return;
+		}
 
 		const rootPath = config.filePath || config.folderPath;
 
@@ -706,31 +683,40 @@ class Watchr extends EventEmitter<WatchrEventMap> implements Closable {
 	 * @returns Native watch options.
 	 */
 	#toNodeWatchOptions(options: NormalizedWatchrOptions): WatchOptions {
-		const ignore = options.ignore;
-		const watchOptions: WatchOptions = {
+		return {
 			...(options.persistent === undefined ? {} : { persistent: options.persistent }),
 			recursive: options.recursive,
-			...(options.encoding === undefined ? {} : { encoding: options.encoding }),
-			...(options.throwIfNoEntry === undefined ? {} : { throwIfNoEntry: options.throwIfNoEntry })
+			encoding: 'utf8'
 		};
-
-		if (ignore === undefined) { return watchOptions }
-		if (typeof ignore === 'function' || (Array.isArray(ignore) && ignore.some((entry) => typeof entry === 'function'))) {
-			return { ...watchOptions, ignore: (targetPath: string) => this.isIgnored(targetPath, ignore) };
-		}
-
-		return { ...watchOptions, ignore };
 	}
 
 	/**
 	 * Validates runtime watch arguments to prevent unsafe configuration.
+	 * @param target Required nonempty target paths
 	 * @param options The watcher options
-	 * @param handler Optional event handler
 	 */
-	static #validateWatchArguments(options: WatchrOptions, handler?: Handler): void {
-		if (handler !== undefined && typeof handler !== 'function') {
-			throw new Error('handler must be a function.');
+	static #validateWatchArguments(target: Path | Path[], options: WatchrOptions): void {
+		const targets = Array.isArray(target) ? Array.from(target) : [ target ];
+		if (targets.length === 0 || targets.some((path) => typeof path !== 'string' || path.trim().length === 0)) {
+			throw new Error('target must be a nonempty string or array of nonempty strings.');
 		}
+		if (options === null || typeof options !== 'object' || Array.isArray(options)) {
+			throw new Error('options must be an object.');
+		}
+		const optionNames = new Set<string>([ 'persistent', 'recursive', 'ignore', 'emitInitial', 'handlers', 'renameTimeout', 'statTimeout', 'fallbackScanInterval', 'followSymlinks' ] satisfies (keyof WatchrOptions)[]);
+		for (const name of Reflect.ownKeys(options)) {
+			if (typeof name !== 'string' || !optionNames.has(name)) { throw new Error(`Unknown option: ${String(name)}.`) }
+		}
+		if (options.handlers !== undefined) {
+			if (options.handlers === null || typeof options.handlers !== 'object' || Array.isArray(options.handlers)) { throw new Error('handlers must be an object.') }
+			const names = new Set([ 'add', 'addDir', 'change', 'unlink', 'unlinkDir', 'rename', 'renameDir', 'all', 'error', 'close' ]);
+			for (const [ name, entry ] of Object.entries(options.handlers)) {
+				if (!names.has(name)) { throw new Error(`Unknown handler: ${name}`) }
+				if (entry === undefined || typeof entry === 'function') { continue }
+				if (entry === null || typeof entry !== 'object' || typeof entry.handler !== 'function' || (entry.once !== undefined && typeof entry.once !== 'boolean')) { throw new Error(`Invalid handler: ${name}`) }
+			}
+		}
+		if (options.emitInitial !== undefined && typeof options.emitInitial !== 'boolean') { throw new Error('emitInitial must be a boolean.') }
 
 		if (options.ignore !== undefined && !Watchr.#isValidIgnoreOption(options.ignore)) {
 			throw new Error('ignore must be a function, string, RegExp, or array of these values.');
@@ -763,6 +749,7 @@ class Watchr extends EventEmitter<WatchrEventMap> implements Closable {
 
 		return {
 			...options,
+			emitInitial: options.emitInitial ?? false,
 			recursive: options.recursive ?? true,
 			renameTimeout: options.renameTimeout ?? renameTimeout,
 			statTimeout: options.statTimeout ?? statTimeout,
@@ -787,4 +774,5 @@ class Watchr extends EventEmitter<WatchrEventMap> implements Closable {
 }
 
 export default Watchr;
-export { Watchr, WatchrStats, FileSystemEvent, WatcherEvent, FileEvent, DirectoryEvent, type WatchrOptions, type WatchrEventMap, type Handler, type WatchIgnore, type Path };
+export { Watchr, WatchrStats, FileSystemEvent, FileEvent, DirectoryEvent };
+export type { WatchrOptions, WatchrHandlers, WatchrHandlerOptions, WatchrEventHandler, WatchrEvent, WatchrEventMap, WatchrPathEvent, WatchrRenameEvent, WatchrState, WatchIgnore, Path, WatchrAddEvent, WatchrAddDirEvent, WatchrChangeEvent, WatchrUnlinkEvent, WatchrUnlinkDirEvent, WatchrRenameFileEvent, WatchrRenameDirectoryEvent } from './@types/index';

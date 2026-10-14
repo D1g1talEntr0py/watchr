@@ -33,10 +33,9 @@ async function sample(root: string): Promise<Sample | undefined> {
 	await settleHeap(gc);
 	const heapBefore = process.memoryUsage().heapUsed;
 	const startedAt = performance.now();
-	const watcher = new Watchr(root, { ignoreInitial: true });
 	const errors: string[] = [];
-	watcher.on('error', (error: Error) => errors.push(error.message));
-	const ready = await watcher.readyLock.then(() => true, () => false);
+	const watcher = new Watchr(root, { emitInitial: false, handlers: { error: (error) => { errors.push(error.message) } } });
+	const ready = await watcher.start().then(() => true, () => false);
 	const readyMs = performance.now() - startedAt;
 
 	if (!ready) {

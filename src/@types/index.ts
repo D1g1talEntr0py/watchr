@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import type { FSWatcher, WatchOptions } from 'node:fs';
+import type { FSWatcher } from 'node:fs';
 import type { WatchrStats } from '../watchr-stats';
 import type { InodeNumber, Stats } from './stats';
 import type { NodeTargetEvent, FileSystemEvent, DirectoryEvent, FileEvent } from '../constants';
@@ -14,7 +14,9 @@ type Producer<R> = Function<never, R>;
 type Callable = Function<never, void>;
 type AsyncCallable = Function<never, Promise<void>>;
 type Resolver = Function<never, void>;
-type WatchIgnore = Exclude<WatchOptions['ignore'], undefined>;
+type WatchIgnoreEntry = string | RegExp | ((path: string) => boolean);
+/** Library-owned ignore rules; callbacks receive an absolute path. */
+type WatchIgnore = WatchIgnoreEntry | readonly WatchIgnoreEntry[];
 /** A precompiled ignore predicate produced from a {@link WatchIgnore}. */
 type IgnoreMatcher = (targetPath: Path) => boolean;
 
@@ -22,23 +24,43 @@ type Event = [ FileSystemEvent, Path, WatchrStats, Path? ];
 /** A derived event paired with the stats it should be emitted with (previous stats for removals, next stats otherwise). */
 type StateEvent = { type: FileSystemEvent, stats: WatchrStats };
 type TargetEventEmitter = (event: FileSystemEvent, targetPath: Path, stats: WatchrStats, targetPathNext?: string) => void;
-type Handler = (event: FileSystemEvent, stats: WatchrStats, targetPath: Path, targetPathNext?: string) => void;
 type NodeEventHandler = (event: NodeTargetEvent, targetPath?: Path, isInitial?: boolean) => Promise<void>;
 
-/** Listener argument tuples for every event a `Watchr` emits, keyed by event name. */
+/** Lifecycle state of a watcher. */
+type WatchrState = 'idle' | 'starting' | 'watching' | 'closed';
+/** Ordinary filesystem event payload. */
+type PathEvent<K extends FileSystemEvent> = Readonly<{ type: K, path: Path, stats: WatchrStats, initial: boolean }>;
+/** Rename payload with explicit source and destination paths. */
+type RenameEvent<K extends FileSystemEvent> = Readonly<{ type: K, from: Path, to: Path, stats: WatchrStats, initial: false }>;
+type WatchrAddEvent = PathEvent<'add'>;
+type WatchrAddDirEvent = PathEvent<'addDir'>;
+type WatchrChangeEvent = PathEvent<'change'>;
+type WatchrUnlinkEvent = PathEvent<'unlink'>;
+type WatchrUnlinkDirEvent = PathEvent<'unlinkDir'>;
+type WatchrRenameFileEvent = RenameEvent<'rename'>;
+type WatchrRenameDirectoryEvent = RenameEvent<'renameDir'>;
+type WatchrPathEvent = WatchrAddEvent | WatchrAddDirEvent | WatchrChangeEvent | WatchrUnlinkEvent | WatchrUnlinkDirEvent;
+type WatchrRenameEvent = WatchrRenameFileEvent | WatchrRenameDirectoryEvent;
+type WatchrEvent = WatchrPathEvent | WatchrRenameEvent;
+/** Payloads keyed by configured handler name. */
 type WatchrEventMap = {
-	add: [ stats: WatchrStats, targetPath: Path ];
-	addDir: [ stats: WatchrStats, targetPath: Path ];
-	change: [ stats: WatchrStats, targetPath: Path ];
-	unlink: [ stats: WatchrStats, targetPath: Path ];
-	unlinkDir: [ stats: WatchrStats, targetPath: Path ];
-	rename: [ stats: WatchrStats, targetPath: Path, targetPathNext: Path ];
-	renameDir: [ stats: WatchrStats, targetPath: Path, targetPathNext: Path ];
-	all: [ event: FileSystemEvent, stats: WatchrStats, targetPath: Path, targetPathNext?: Path ];
-	error: [ error: Error ];
-	ready: [];
-	close: [];
+	add: WatchrAddEvent;
+	addDir: WatchrAddDirEvent;
+	change: WatchrChangeEvent;
+	unlink: WatchrUnlinkEvent;
+	unlinkDir: WatchrUnlinkDirEvent;
+	rename: WatchrRenameFileEvent;
+	renameDir: WatchrRenameDirectoryEvent;
+	all: WatchrEvent;
+	error: Error;
+	close: undefined;
 };
+/** A configured callback; returned promises are observed but never awaited. */
+type WatchrEventHandler<K extends keyof WatchrEventMap> = (...args: K extends 'close' ? [] : [event: WatchrEventMap[K]]) => void | PromiseLike<void>;
+/** Options for a callback consumed before its first invocation when `once` is true. */
+type WatchrHandlerOptions<K extends keyof WatchrEventMap> = { handler: WatchrEventHandler<K>, once?: boolean };
+/** Optional callbacks for filesystem events and lifecycle notifications. */
+type WatchrHandlers = { [K in keyof WatchrEventMap]?: WatchrEventHandler<K> | WatchrHandlerOptions<K> };
 
 type Path = string;
 type NodeError = NodeJS.ErrnoException;
@@ -80,7 +102,7 @@ export type WatchrConfig = {
 	options: NormalizedWatchrOptions;
 	watcher: FSWatcher;
 	filePath?: Path;
-  handler?: Handler;
+	initial?: boolean;
 	nodeHandler?: NodeEventHandler;
 	eventManager?: { cleanup: () => void };
 };
@@ -92,10 +114,11 @@ type WatchrOptions = {
 	 * Defaults to `true`; `false` limits both the initial scan and live events to direct children of the root.
 	 */
 	recursive?: boolean;
-	encoding?: BufferEncoding;
-  ignore?: WatchIgnore;
-  ignoreInitial?: boolean;
-	throwIfNoEntry?: boolean;
+	ignore?: WatchIgnore;
+	/** Whether initial inventory is delivered before startup resolves. Defaults to false. */
+	emitInitial?: boolean;
+	/** Callbacks copied at construction and released on close. */
+	handlers?: WatchrHandlers;
 	// TODO: Having a timeout for these sorts of things isn't exactly reliable, but what's the better option?
   renameTimeout?: number;
 	/**
@@ -141,7 +164,6 @@ export type {
 	Resolver,
 	Event,
 	StateEvent,
-	Handler,
 	TargetEventEmitter,
 	NodeEventHandler,
 	WatchIgnore,
@@ -153,6 +175,20 @@ export type {
 	StatOptions,
 	StateUpdateOptions,
 	WatchrEventMap,
+	WatchrState,
+	WatchrEvent,
+	WatchrPathEvent,
+	WatchrRenameEvent,
+	WatchrAddEvent,
+	WatchrAddDirEvent,
+	WatchrChangeEvent,
+	WatchrUnlinkEvent,
+	WatchrUnlinkDirEvent,
+	WatchrRenameFileEvent,
+	WatchrRenameDirectoryEvent,
+	WatchrEventHandler,
+	WatchrHandlerOptions,
+	WatchrHandlers,
 	WatchrOptions,
 	NormalizedWatchrOptions,
 	Producer

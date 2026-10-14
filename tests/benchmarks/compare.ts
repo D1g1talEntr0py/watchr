@@ -100,16 +100,22 @@ function watchrAdapter(): Adapter {
 		scans: true,
 		reference: false,
 		async start(root, onEvent) {
-			const watcher = new Watchr(root, { ignoreInitial: true, recursive: true });
 			let failure: string | undefined;
-			watcher.on('error', (error: Error) => { failure ??= error.message });
-			watcher.on('all', (event: string, _stats: unknown, path: string, pathNext?: string) => {
-				const at = performance.now();
-				onEvent({ kind: fileKinds[event] ?? 'other', path, pathNext, at });
+			const watcher = new Watchr(root, {
+				emitInitial: false,
+				recursive: true,
+				handlers: {
+					error: (error) => { failure ??= error.message },
+					all: (event) => {
+						const at = performance.now();
+						const renamed = event.type === 'rename' || event.type === 'renameDir';
+						onEvent({ kind: fileKinds[event.type] ?? 'other', path: renamed ? event.from : event.path, pathNext: renamed ? event.to : undefined, at });
+					}
+				}
 			});
 
 			try {
-				await watcher.readyLock;
+				await watcher.start();
 			} catch (error) {
 				watcher.close();
 				throw new Error(failure ?? messageOf(error), { cause: error });
@@ -659,7 +665,7 @@ function printReport(result: Report, tables: Table[]): void {
 	const tally = [ ...wins ].sort((left, right) => right[1] - left[1]).map(([ name, total ]) => `${name} ${total}/${decided.length}`).join(' · ');
 	console.log(`  ${'Categories won'.padEnd(categoryWidth)}  ${styleText('bold', tally)}`);
 
-	console.log(styleText('dim', '\nAll watchers use their default options with ignoreInitial and recursive on.'));
+	console.log(styleText('dim', '\nAll watchers use their default options with initial events disabled and recursive watching on.'));
 	console.log(styleText('dim', 'chokidar delays unlinks by 100 ms (atomic); watchr holds an add only when its inode was just vacated.'));
 
 	if (result.skipped.length) {

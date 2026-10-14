@@ -5,7 +5,7 @@ import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { FileSystemEvent } from '../src/watchr';
 import { FileSystem } from '../src/file-system';
-import { cleanupTempRoots, closeWatchers, collectEvents, createReadyWatcher, createTempRoot, delay, settle } from './helpers/fs-fixtures';
+import { observeEvent, cleanupTempRoots, closeWatchers, collectEvents, createReadyWatcher, createTempRoot, delay, settle } from './helpers/fs-fixtures';
 
 const { nativeWatchers, rootStatListeners, scans } = vi.hoisted(() => ({
 	nativeWatchers: new Map<string, FSWatcher>(),
@@ -70,7 +70,7 @@ describe('Watchr native notification boundary', () => {
 		vi.stubGlobal('process', { ...process, platform: 'darwin' });
 		vi.useFakeTimers({ toFake: [ 'setTimeout', 'clearTimeout' ] });
 		const roots = Array.from({ length: rootCount }, () => createTempRoot());
-		const watcher = await createReadyWatcher(roots, { ignoreInitial: true, persistent: false, renameTimeout: 0 });
+		const watcher = await createReadyWatcher(roots, { emitInitial: false, persistent: false, renameTimeout: 0 });
 		const { events } = collectEvents(watcher);
 		const first = join(roots[0]!, 'first.txt');
 		const second = join(roots[rootCount - 1]!, 'second.txt');
@@ -96,7 +96,7 @@ describe('Watchr native notification boundary', () => {
 		vi.stubGlobal('process', { ...process, platform: 'darwin' });
 		vi.useFakeTimers({ toFake: [ 'setTimeout', 'clearTimeout' ] });
 		const root = createTempRoot();
-		const watcher = await createReadyWatcher(root, { ignoreInitial: true, persistent: false });
+		const watcher = await createReadyWatcher(root, { emitInitial: false, persistent: false });
 		const { events } = collectEvents(watcher);
 		watcher.close();
 		vi.mocked(readdir).mockClear();
@@ -112,7 +112,7 @@ describe('Watchr native notification boundary', () => {
 	it('detects Windows root deletion through stat polling and releases the polling listener', async () => {
 		vi.stubGlobal('process', { ...process, platform: 'win32' });
 		const root = createTempRoot();
-		const watcher = await createReadyWatcher(root, { ignoreInitial: true, renameTimeout: 0 });
+		const watcher = await createReadyWatcher(root, { emitInitial: false, renameTimeout: 0 });
 		const { events } = collectEvents(watcher);
 		expect(watchFile).toHaveBeenCalledWith(root, { interval: 100, persistent: true }, expect.any(Function));
 		const listener = rootStatListeners.get(root)!;
@@ -125,13 +125,13 @@ describe('Watchr native notification boundary', () => {
 		await vi.waitFor(() => expect(events.find(({ path }) => path === root)?.event).toBe(FileSystemEvent.UNLINK_DIR));
 		expect(nativeWatchers.get(root)!.close).toHaveBeenCalled();
 		expect(unwatchFile).toHaveBeenCalledWith(root, listener);
-		expect(watcher.isClosed()).toBe(false);
+		expect(watcher.state).not.toBe('closed');
 	});
 
 	it('removes Windows root stat polling on close without waiting for deletion', async () => {
 		vi.stubGlobal('process', { ...process, platform: 'win32' });
 		const root = createTempRoot();
-		const watcher = await createReadyWatcher(root, { ignoreInitial: true, persistent: false });
+		const watcher = await createReadyWatcher(root, { emitInitial: false, persistent: false });
 		expect(watchFile).toHaveBeenCalledWith(root, { interval: 100, persistent: false }, expect.any(Function));
 		const listener = rootStatListeners.get(root)!;
 		watcher.close();
@@ -139,15 +139,15 @@ describe('Watchr native notification boundary', () => {
 		expect(unwatchFile).toHaveBeenCalledWith(root, listener);
 	});
 
-	it.each([ false, true ])('recovers a missed macOS file notification through stat polling (ignoreInitial=%s)', async (ignoreInitial) => {
+	it.each([ false, true ])('recovers a missed macOS file notification through stat polling (emitInitial=%s)', async (emitInitial) => {
 		vi.stubGlobal('process', { ...process, platform: 'darwin' });
 		vi.useFakeTimers({ toFake: [ 'setInterval', 'clearInterval' ] });
 		const root = createTempRoot();
 		const file = join(root, 'watched.txt');
 		writeFileSync(file, 'original');
-		const watcher = await createReadyWatcher(file, { ignoreInitial, persistent: false });
+		const watcher = await createReadyWatcher(file, { emitInitial, persistent: false });
 		const { events } = collectEvents(watcher);
-		if (!ignoreInitial) {
+		if (emitInitial) {
 			await vi.waitFor(() => expect(events[0]).toMatchObject({ event: FileSystemEvent.ADD, path: file }));
 			events.length = 0;
 		}
@@ -175,7 +175,7 @@ describe('Watchr native notification boundary', () => {
 		const sibling = join(root, 'sibling.txt');
 		writeFileSync(file, 'original');
 		writeFileSync(sibling, 'sibling');
-		const watcher = await createReadyWatcher(file, { ignoreInitial: true });
+		const watcher = await createReadyWatcher(file, { emitInitial: false });
 		expect(watch).toHaveBeenCalledWith(root, expect.objectContaining({ recursive: platform === 'darwin' }), expect.any(Function));
 		const { events } = collectEvents(watcher);
 		const native = nativeWatchers.get(root)!;
@@ -192,7 +192,7 @@ describe('Watchr native notification boundary', () => {
 	it.skipIf(process.platform === 'win32').each([ false, true ])('discovers coalesced macOS additions (named entry is ignored symlink=%s)', async (symlink) => {
 		vi.stubGlobal('process', { ...process, platform: 'darwin' });
 		const root = createTempRoot();
-		const watcher = await createReadyWatcher(root, { ignoreInitial: true, followSymlinks: false, renameTimeout: 0 });
+		const watcher = await createReadyWatcher(root, { emitInitial: false, followSymlinks: false, renameTimeout: 0 });
 		const { events } = collectEvents(watcher);
 		const first = join(root, 'first.txt');
 		const second = join(root, 'second.txt');
@@ -214,7 +214,7 @@ describe('Watchr native notification boundary', () => {
 
 	it.each([ '', null ])('discovers new files through an unnamed notification (%s)', async (filename) => {
 		const root = createTempRoot();
-		const watcher = await createReadyWatcher(root, { ignoreInitial: true, renameTimeout: 0 });
+		const watcher = await createReadyWatcher(root, { emitInitial: false, renameTimeout: 0 });
 		const { events } = collectEvents(watcher);
 		const file = join(root, 'new.txt');
 		writeFileSync(file, 'new contents');
@@ -228,9 +228,9 @@ describe('Watchr native notification boundary', () => {
 
 	it.each([ 'EIO', undefined ])('sanitizes native watcher errors with code %s', async (code) => {
 		const root = createTempRoot();
-		const watcher = await createReadyWatcher(root, { ignoreInitial: true });
+		const watcher = await createReadyWatcher(root, { emitInitial: false });
 		const errors: Error[] = [];
-		watcher.on('error', (error) => errors.push(error));
+		observeEvent(watcher, 'error', (error) => errors.push(error));
 		const original = Object.assign(new Error(`Cannot watch ${root}`), { code });
 		nativeWatchers.get(root)!.emit('error', original);
 
@@ -241,16 +241,16 @@ describe('Watchr native notification boundary', () => {
 			cause: original
 		});
 		expect(errors[0]?.message).not.toContain(root);
-		expect(watcher.isClosed()).toBe(false);
+		expect(watcher.state).not.toBe('closed');
 	});
 
 	it.each([ false, true ])('reports a live stat failure immediately and recovers (multi-path=%s)', async (multiple) => {
 		const root = createTempRoot();
 		const file = join(root, 'file.txt');
 		writeFileSync(file, 'original');
-		const watcher = await createReadyWatcher(root, { ignoreInitial: true });
+		const watcher = await createReadyWatcher(root, { emitInitial: false });
 		const errors: Error[] = [];
-		watcher.on('error', (error) => errors.push(error));
+		observeEvent(watcher, 'error', (error) => errors.push(error));
 		const { events } = collectEvents(watcher);
 		const failure = Object.assign(new Error('Stat operation timed out'), { code: 'WATCHR_STAT_TIMEOUT' });
 		vi.spyOn(FileSystem, 'getStats').mockRejectedValueOnce(failure);
@@ -259,7 +259,7 @@ describe('Watchr native notification boundary', () => {
 		if (multiple) { native.emit('change', 'change', 'other.txt') }
 
 		await vi.waitFor(() => expect(errors).toEqual([ failure ]));
-		expect(watcher.isClosed()).toBe(false);
+		expect(watcher.state).not.toBe('closed');
 		writeFileSync(file, 'recovered contents');
 		native.emit('change', 'change', 'file.txt');
 		await vi.waitFor(() => expect(events.find(({ path }) => path === file)).toMatchObject({ event: FileSystemEvent.CHANGE, stats: { size: 18 } }));
@@ -270,7 +270,7 @@ describe('Watchr native notification boundary', () => {
 		const target = join(root, 'entry');
 		const other = join(root, 'other.txt');
 		writeFileSync(target, 'file');
-		const watcher = await createReadyWatcher(root, { ignoreInitial: true, renameTimeout: 0 });
+		const watcher = await createReadyWatcher(root, { emitInitial: false, renameTimeout: 0 });
 		const { events } = collectEvents(watcher);
 		rmSync(target);
 		mkdirSync(target);
@@ -289,7 +289,7 @@ describe('Watchr native notification boundary', () => {
 
 	it('coalesces notification storms during a scan and discovers files in the queued scan', async () => {
 		const root = createTempRoot();
-		const watcher = await createReadyWatcher(root, { ignoreInitial: true, renameTimeout: 0, fallbackScanInterval: 25 });
+		const watcher = await createReadyWatcher(root, { emitInitial: false, renameTimeout: 0, fallbackScanInterval: 25 });
 		const { events } = collectEvents(watcher);
 		vi.mocked(readdir).mockClear();
 		const scan = Promise.withResolvers<void>();
@@ -310,7 +310,7 @@ describe('Watchr native notification boundary', () => {
 
 	it('does not emit stale events after closing during a snapshot scan', async () => {
 		const root = createTempRoot();
-		const watcher = await createReadyWatcher(root, { ignoreInitial: true, renameTimeout: 0 });
+		const watcher = await createReadyWatcher(root, { emitInitial: false, renameTimeout: 0 });
 		const { events } = collectEvents(watcher);
 		vi.mocked(readdir).mockClear();
 		const scan = Promise.withResolvers<void>();
@@ -331,7 +331,7 @@ describe('Watchr native notification boundary', () => {
 
 	it('recovers on the next notification after a snapshot read fails', async () => {
 		const root = createTempRoot();
-		const watcher = await createReadyWatcher(root, { ignoreInitial: true, renameTimeout: 0, fallbackScanInterval: 0 });
+		const watcher = await createReadyWatcher(root, { emitInitial: false, renameTimeout: 0, fallbackScanInterval: 0 });
 		const { events } = collectEvents(watcher);
 		vi.mocked(readdir).mockClear();
 		scans.failure = Object.assign(new Error('snapshot unavailable'), { code: 'EIO' });
@@ -344,7 +344,7 @@ describe('Watchr native notification boundary', () => {
 		writeFileSync(file, 'recovered');
 		native.emit('change', 'rename', '');
 		await vi.waitFor(() => expect(events.find(({ path }) => path === file)?.event).toBe(FileSystemEvent.ADD));
-		expect(watcher.isClosed()).toBe(false);
+		expect(watcher.state).not.toBe('closed');
 	});
 
 	it.each([
@@ -358,7 +358,7 @@ describe('Watchr native notification boundary', () => {
 		const source = join(root, 'source');
 		const target = join(root, 'target');
 		if (directory) { mkdirSync(source) } else { writeFileSync(source, 'original') }
-		const watcher = await createReadyWatcher(root, { ignoreInitial: true, renameTimeout: 1000 });
+		const watcher = await createReadyWatcher(root, { emitInitial: false, renameTimeout: 1000 });
 		const { events } = collectEvents(watcher);
 		const native = nativeWatchers.get(root)!;
 		renameSync(source, target);
@@ -393,7 +393,7 @@ describe('Watchr native notification boundary', () => {
 		const saved = join(outside, 'saved.txt');
 		writeFileSync(file, 'original');
 		linkSync(file, saved);
-		const watcher = await createReadyWatcher(root, { ignoreInitial: true, renameTimeout: 1000 });
+		const watcher = await createReadyWatcher(root, { emitInitial: false, renameTimeout: 1000 });
 		const { events } = collectEvents(watcher);
 		rmSync(file);
 		writeFileSync(join(root, 'marker.txt'), 'marker');
@@ -413,7 +413,7 @@ describe('Watchr native notification boundary', () => {
 		const source = join(root, 'source.txt');
 		const target = join(root, 'target.txt');
 		writeFileSync(source, 'original');
-		const watcher = await createReadyWatcher(root, { ignoreInitial: true, renameTimeout: 1000 });
+		const watcher = await createReadyWatcher(root, { emitInitial: false, renameTimeout: 1000 });
 		const { events } = collectEvents(watcher);
 		const native = nativeWatchers.get(root)!;
 		renameSync(source, target);

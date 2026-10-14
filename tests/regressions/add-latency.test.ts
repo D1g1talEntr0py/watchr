@@ -15,7 +15,7 @@ describe('add latency for brand-new inodes', () => {
 
 	it('emits add for a new file without waiting for renameTimeout', async () => {
 		const root = createTempRoot('watchr-add-latency-');
-		const watcher = await createReadyWatcher(root, { ignoreInitial: true, renameTimeout });
+		const watcher = await createReadyWatcher(root, { emitInitial: false, renameTimeout });
 		const path = join(root, 'new.txt');
 		const added = waitForEvent(watcher, FileSystemEvent.ADD, { path, timeoutMs: renameTimeout / 2 });
 
@@ -26,7 +26,7 @@ describe('add latency for brand-new inodes', () => {
 
 	it('emits addDir for a new directory without waiting for renameTimeout', async () => {
 		const root = createTempRoot('watchr-add-latency-');
-		const watcher = await createReadyWatcher(root, { ignoreInitial: true, renameTimeout });
+		const watcher = await createReadyWatcher(root, { emitInitial: false, renameTimeout });
 		const path = join(root, 'dir');
 		const added = waitForEvent(watcher, FileSystemEvent.ADD_DIR, { path, timeoutMs: renameTimeout / 2 });
 
@@ -40,7 +40,7 @@ describe('add latency for brand-new inodes', () => {
 		const from = join(root, 'a.txt');
 		const to = join(root, 'b.txt');
 		writeFileSync(from, 'x');
-		const watcher = await createReadyWatcher(root, { ignoreInitial: true, renameTimeout });
+		const watcher = await createReadyWatcher(root, { emitInitial: false, renameTimeout });
 		const { events, dispose } = collectEvents(watcher);
 		const renamed = waitForEvent(watcher, FileSystemEvent.RENAME, { path: from, timeoutMs: renameTimeout * 2 });
 
@@ -54,7 +54,7 @@ describe('add latency for brand-new inodes', () => {
 
 	it('reports a short-lived file as add followed by unlink', async () => {
 		const root = createTempRoot('watchr-add-latency-');
-		const watcher = await createReadyWatcher(root, { ignoreInitial: true, renameTimeout: 150 });
+		const watcher = await createReadyWatcher(root, { emitInitial: false, renameTimeout: 150 });
 		const { events, dispose } = collectEvents(watcher);
 		const path = join(root, 'temp.txt');
 		const added = waitForEvent(watcher, FileSystemEvent.ADD, { path });

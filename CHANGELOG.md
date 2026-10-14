@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.0](https://github.com/D1g1talEntr0py/watchr/compare/v3.5.5...v4.0.0) - 2026-10-14
+
+
+### Breaking Changes
+* **api:** replace emitter API with configured lifecycle handlers ([283ca3f](https://github.com/D1g1talEntr0py/watchr/commit/283ca3f30369062aa049fe7d2bc9c0f227d34c71))
+
+
+
+### Bug Fixes
+* **tests:** ensure startup error is correctly typed in watcher lifecycle test ([2f77b5c](https://github.com/D1g1talEntr0py/watchr/commit/2f77b5cb41c3022652b253b82391fa412b5ae5d2))
+
+
+
+
+### Documentation
+* **bench:** add UX refactor validation report ([88490a0](https://github.com/D1g1talEntr0py/watchr/commit/88490a002180b71e94a166e04edb7bdb662daeea))
+
+
+
+### Chores
+* **deps:** update development dependencies ([b386a4b](https://github.com/D1g1talEntr0py/watchr/commit/b386a4bff398a91c698eb646c82d150457737e27))
+
+
+
+
+
+### Continuous Integration
+* **release:** read package version with ESM ([e5b4bac](https://github.com/D1g1talEntr0py/watchr/commit/e5b4bac7a84c04abf233e83b7cd0f1c48763326c))
+
+
+
 ## [3.5.5](https://github.com/D1g1talEntr0py/watchr/compare/v3.5.4...v3.5.5) - 2026-10-03
 
 
@@ -20,6 +51,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Chores
 * **docs:** update README to clarify fork status and add benchmarks ([f613646](https://github.com/D1g1talEntr0py/watchr/commit/f613646a78c1b168da72e12dae522063ce08d3d6))
+
+### Chores
+* **release:** 3.5.5 [skip ci] ([108fb56](https://github.com/D1g1talEntr0py/watchr/commit/108fb56b317555b5a9c81e79b1da1fe15d46d70d))
 
 
 

@@ -301,10 +301,20 @@ Previous-version benchmark numbers are omitted: they do not validate the redesig
 
 ```bash
 pnpm bench           # internal hot-path microbenchmarks
-pnpm bench:compare   # readiness, retained heap, latency, rename correlation
+pnpm bench:compare   # startup, close, heap, latency, bursts, file/directory renames
 pnpm bench:baseline  # record the before-change baseline on this machine
 pnpm bench:ci        # compare the candidate to that baseline
 ```
+
+Watchr startup times only `await watcher.start()`, excluding idle construction and close, which are reported separately. Chokidar is timed from `watch()` until `ready`; Parcel is timed until `subscribe()` resolves. All three libraries are ranked by time to their startup API completing, despite different inventory guarantees; raw `fs.watch` remains an unranked reference. Latency covers creates, writes, deletes, nested creates, and atomic replacement. Create/write/delete bursts report unique delivery, misses, duplicates, and completion throughput; incomplete delivery is not ranked as a speed win.
+
+```bash
+pnpm bench:compare --mitata                   # additional construct/start/close distributions
+pnpm bench:compare --runs 5 --ops 100 --burst-ops 1000 --output /tmp/watchr-comparison.json
+pnpm bench:compare --quick --runs 1 --ops 3 --burst-ops 20  # small validation fixtures
+```
+
+The optional mitata suite measures complete lifecycle cycles, including cleanup, not `start()` alone. All measurements use warm process/filesystem caches; retained heap excludes native allocations and RSS deltas are process-wide. `--runs` controls lifecycle medians; latency phases are time-bounded and bursts run once per workload. A latency miss means the requested event kind was absent; alternative notifications are counted separately. Benchmark-only packages are pinned and installed outside the project. The updated timing methodology requires a new baseline; quick runs cannot update or check baselines.
 
 Record the baseline **before** making performance changes; do not overwrite it with candidate measurements. Results depend on runtime, platform, filesystem, and workload. See [Contributing](CONTRIBUTING.md) for development gates.
 

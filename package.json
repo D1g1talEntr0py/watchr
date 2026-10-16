@@ -19,7 +19,7 @@
     }
   ],
   "engines": {
-    "node": ">=24.6.0",
+    "node": ">=24.11.1",
     "pnpm": ">=12"
   },
   "packageManager": "pnpm@12.13.0",
@@ -65,16 +65,12 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@parcel/watcher": "^2.6.0",
     "@types/node": "^26.6.5",
     "@typescript/native": "npm:typescript@^7.0.2",
     "@vitest/coverage-v8": "^5.0.4",
-    "chokidar": "^5.0.0",
     "esbuild": "^0.28.2",
     "eslint": "^10.12.0",
-    "eslint-plugin-jsdoc": "^65.3.2",
-    "memfs": "^4.80.0",
-    "mitata": "^1.0.34",
+    "eslint-plugin-jsdoc": "^65.3.4",
     "typescript": "npm:@typescript/typescript6@^6.0.2",
     "typescript-eslint": "^8.71.2",
     "vitest": "^5.0.4"

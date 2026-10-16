@@ -32,9 +32,9 @@ const scenarios: Scenario[] = [
 async function sample(root: string): Promise<Sample | undefined> {
 	await settleHeap(gc);
 	const heapBefore = process.memoryUsage().heapUsed;
-	const startedAt = performance.now();
 	const errors: string[] = [];
 	const watcher = new Watchr(root, { emitInitial: false, handlers: { error: (error) => { errors.push(error.message) } } });
+	const startedAt = performance.now();
 	const ready = await watcher.start().then(() => true, () => false);
 	const readyMs = performance.now() - startedAt;
 

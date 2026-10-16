@@ -4,13 +4,24 @@
 // End-to-end latency, readiness and memory against other watchers live in compare.ts.
 
 import { build } from 'esbuild';
-import { bench, do_not_optimize, group, run, summary } from 'mitata';
 import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { readdir, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { buildFlat } from './helpers.ts';
+import { installBenchmarkDependency } from './utils/benchmark-dependencies.ts';
+
+type Mitata = {
+	bench: (name: string, fn: () => unknown) => { baseline: () => unknown };
+	do_not_optimize: <Value>(value: Value) => void;
+	group: (name: string, fn: () => unknown) => void;
+	run: () => Promise<unknown>;
+	summary: (fn: () => unknown) => void;
+};
+
+const mitataDependency = await installBenchmarkDependency('mitata');
+const { bench, do_not_optimize, group, run, summary } = await mitataDependency.load() as Mitata;
 
 type Internals = {
 	FileSystem: typeof import('../../src/file-system.ts').FileSystem,
@@ -74,7 +85,7 @@ summary(() => {
 	group(`initial scan (${scanFiles} files)`, () => {
 		bench('fs.promises.readdir (recursive)', () => readdir(scanRoot, { recursive: true, withFileTypes: true })).baseline();
 		bench('FileSystem.readDirectory', () => FileSystem.readDirectory(scanRoot));
-		bench('new Watchr() until ready', async () => {
+		bench('Watchr construct + start + close', async () => {
 			const watcher = new Watchr(scanRoot, { emitInitial: false });
 			try {
 				await watcher.start();

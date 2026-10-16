@@ -90,7 +90,7 @@ Commands:
 
 Benchmark notes:
 - Shared fixture builders and gc/percentile helpers live in [tests/benchmarks/helpers.ts](../tests/benchmarks/helpers.ts).
-- `chokidar` and `@parcel/watcher` are devDependencies used only by the comparison bench; the parcel build script is denied in `pnpm-workspace.yaml` because the prebuilt binary is used.
+- Benchmark-only packages (`mitata`, `chokidar`, and `@parcel/watcher`) are installed at pinned versions into temporary directories when their benchmark runs; they are not project dependencies. The parcel build script is denied in `pnpm-workspace.yaml` because the prebuilt binary is used.
 
 Testing notes:
 - Vitest config is in [vitest.config.ts](../vitest.config.ts); worker forks run with `--expose-gc` so `tests/memory.test.ts` can measure retained heap.

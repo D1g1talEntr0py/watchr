@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.0.0](https://github.com/D1g1talEntr0py/watchr/compare/v4.0.0...v5.0.0) - 2026-10-16
+
+
+### Breaking Changes
+* **api:** use payload-based handler types ([37931eb](https://github.com/D1g1talEntr0py/watchr/commit/37931ebbd3c75ba20c10b67f88d5d55461e9f5f0))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 ## [4.0.0](https://github.com/D1g1talEntr0py/watchr/compare/v3.5.5...v4.0.0) - 2026-10-14
 
 
@@ -26,6 +45,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Chores
 * **deps:** update development dependencies ([b386a4b](https://github.com/D1g1talEntr0py/watchr/commit/b386a4bff398a91c698eb646c82d150457737e27))
+
+### Chores
+* **release:** 4.0.0 [skip ci] ([c5292e4](https://github.com/D1g1talEntr0py/watchr/commit/c5292e4e1fd047dc5f1979dae001b6e719bfdc6b))
 
 
 

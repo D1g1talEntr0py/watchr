@@ -79,6 +79,8 @@ Existing entries are scanned even with the default `emitInitial: false`. Set `em
 
 `close()` is synchronous, idempotent, and terminal. It releases owned native watchers, timers, queues, and rename tracking, clears **all handler references, including inline functions**, and aborts `abortSignal`. The optional `close` handler runs once, without arguments. A closed watcher cannot restart; create a new instance. Closing during startup rejects its pending promise. Neither `close()` nor disposal waits for asynchronous application work already launched by handlers.
 
+`watcher.closed` is a stable promise that resolves after synchronous cleanup completes, whether closure comes from `close()`, disposal, or a startup failure. It observes closure; it does not close the watcher or keep the process alive. With `using`, await the application's shutdown signal first and let leaving the scope close the watcher.
+
 Use `using` for a scope-owned watcher, or plain `const` with `close()` in application teardown or `finally`. `using` is optional; cleanup is not. Both use the same `start()` operation. Use plain `using`, not `await using`, because disposal is synchronous. `persistent: false` lets Node exit but does not close the watcher.
 
 Inline handlers are encouraged for local behavior. Saved function or method references are useful for reuse, **not required for cleanup**. Bind a method yourself if it needs its object's `this`. There is no runtime listener registration or removal API; `options.handlers` is the only subscription mechanism.

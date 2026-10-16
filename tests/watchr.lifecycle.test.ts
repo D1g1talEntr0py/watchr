@@ -40,6 +40,19 @@ describe('configured watcher lifecycle', () => {
 		expect(watcher.start()).toBe(started);
 	});
 
+	it('resolves its stable closed promise after cleanup', async () => {
+		const root = await createRoot();
+		const watcher = new Watchr(root);
+		watchers.push(watcher);
+		const closed = watcher.closed;
+
+		expect(watcher.closed).toBe(closed);
+		await watcher.start();
+		watcher.close();
+		await expect(closed).resolves.toBeUndefined();
+		expect(watcher.state).toBe('closed');
+	});
+
 	it('requires nonempty targets and exposes only the configured lifecycle API', async () => {
 		for (const target of [ undefined, '', [], [ '' ], [ 'valid', 1 ], Array<string>(1) ]) {
 			expect(() => new Watchr(target as string)).toThrow(/target/);
@@ -232,7 +245,9 @@ describe('configured watcher lifecycle', () => {
 		const close = vi.fn();
 		const watcher = new Watchr(root, { handlers: { error, close } });
 		watchers.push(watcher);
+		const closed = watcher.closed;
 		await expect(watcher.start()).rejects.toBe(failure);
+		await expect(closed).resolves.toBeUndefined();
 		expect(error).not.toHaveBeenCalled();
 		expect(close).toHaveBeenCalledTimes(1);
 		expect(watcher.state).toBe('closed');

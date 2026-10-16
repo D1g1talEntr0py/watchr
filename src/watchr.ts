@@ -38,6 +38,8 @@ class Watchr implements Closable {
 	readonly #watchersRestorable: Map<Path, RestorableWatcher>;
 	readonly #abortController: AbortController;
 	readonly #abortSignal: AbortSignal;
+	readonly #closedPromise: Promise<void>;
+	#resolveClosed: () => void = noop;
 	#startPromise: Promise<this> | undefined;
 	#startReject: (reason?: unknown) => void = noop;
 	readonly #target: Path[];
@@ -64,6 +66,9 @@ class Watchr implements Closable {
 		Watchr.#validateWatchArguments(target, options);
 		this.#abortController = new AbortController();
 		this.#abortSignal = this.#abortController.signal;
+		const closed = Promise.withResolvers<void>();
+		this.#closedPromise = closed.promise;
+		this.#resolveClosed = closed.resolve;
 		this.#target = Array.isArray(target) ? [ ...target ] : [ target ];
 		const { handlers, ...watchOptions } = options;
 		this.#options = watchOptions;
@@ -89,6 +94,11 @@ class Watchr implements Closable {
 	 */
 	get abortSignal(): AbortSignal {
 		return this.#abortSignal;
+	}
+
+	/** Resolves after this watcher has closed and completed synchronous cleanup. */
+	get closed(): Promise<void> {
+		return this.#closedPromise;
 	}
 
 	/**
@@ -238,6 +248,8 @@ class Watchr implements Closable {
 			const handler = typeof closeEntry === 'function' ? closeEntry : closeEntry.handler;
 			this.#invoke(handler, [], 'close');
 		}
+		this.#resolveClosed();
+		this.#resolveClosed = noop;
 	}
 
 	/**

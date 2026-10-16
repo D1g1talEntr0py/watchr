@@ -9,6 +9,7 @@ describe('Watchr typings', () => {
 		expectTypeOf(watcher.start).toEqualTypeOf<() => Promise<Watchr>>();
 		expectTypeOf(watcher.state).toEqualTypeOf<WatchrState>();
 		expectTypeOf(watcher.abortSignal).toEqualTypeOf<AbortSignal>();
+		expectTypeOf(watcher.closed).toEqualTypeOf<Promise<void>>();
 		expectTypeOf<Watchr>().toExtend<Disposable>();
 		using scoped = new Watchr('.');
 		expectTypeOf(await scoped.start()).toEqualTypeOf<Watchr>();

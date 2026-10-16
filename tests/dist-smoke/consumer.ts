@@ -2,11 +2,11 @@
  * Consumer-side smoke check for the published typings: compiled by `pnpm type-check:dist` against `dist/` only,
  * without `skipLibCheck`, so a broken or leaking declaration file fails the build.
  */
-import Watchr, { FileSystemEvent, WatchrStats } from '../../dist/watchr.js';
-import type { Path, WatchIgnore, WatchrEventMap, WatchrOptions, WatchrHandlers, WatchrHandlerOptions, WatchrEventHandler, WatchrEvent, WatchrPathEvent, WatchrRenameEvent, WatchrState } from '../../dist/watchr.js';
+import { Watchr, FileSystemEvent, WatchrStats } from '../../dist/watchr.js';
+import type { Path, WatchIgnore, WatchrEventMap, WatchrOptions, WatchrHandlers, WatchrHandlerOptions, WatchrEventHandler, WatchrErrorHandler, WatchrErrorHandlerOptions, WatchrCloseHandler, WatchrCloseHandlerOptions, WatchrEvent, WatchrAddEvent, WatchrPathEvent, WatchrRenameEvent, WatchrRenameDirectoryEvent, WatchrState } from '../../dist/watchr.js';
 
 const options: WatchrOptions = { recursive: true, statTimeout: 500, fallbackScanInterval: 50, followSymlinks: false, emitInitial: true };
-const handler: WatchrEventHandler<'all'> = (event) => {
+const handler: WatchrEventHandler = (event) => {
 	const payload: WatchrEvent = event;
 	const label: FileSystemEvent = event.type;
 	const size: number = event.stats.size;
@@ -29,13 +29,18 @@ const handler: WatchrEventHandler<'all'> = (event) => {
 	void payload; void label; void size;
 };
 const ignore: WatchIgnore = [ '**/node_modules/**', /\.git\// ];
-const once: WatchrHandlerOptions<'all'> = { handler, once: true };
+const once: WatchrHandlerOptions = { handler, once: true };
+const add: WatchrEventHandler<WatchrAddEvent> = (event) => void [ event.stats.modifiedTimeNs, event.path ];
+const error: WatchrErrorHandler = (error) => void error;
+const errorOptions: WatchrErrorHandlerOptions = { handler: error, once: true };
+const close: WatchrCloseHandler = () => undefined;
+const closeOptions: WatchrCloseHandlerOptions = { handler: close, once: true };
 const handlers: WatchrHandlers = {
 	all: once,
-	add: (event) => void [ event.stats.modifiedTimeNs, event.path ],
+	add,
 	rename: (event) => void event.to,
-	error: (error: Error) => void error,
-	close: () => undefined
+	error: errorOptions,
+	close: closeOptions
 };
 const watcher = new Watchr('.', { ...options, ignore, handlers });
 const startup: Promise<Watchr> = watcher.start();
@@ -46,7 +51,9 @@ watcher.close();
 using scoped = await new Watchr('.').start();
 void scoped;
 
-const rename: WatchrEventMap['renameDir'] = { type: 'renameDir', stats: WatchrStats.synthetic(true), from: '/a', to: '/b', initial: false };
+const rename: WatchrRenameDirectoryEvent = { type: 'renameDir', stats: WatchrStats.synthetic(true), from: '/a', to: '/b', initial: false };
+const renamePayload: WatchrEventMap['renameDir'] = rename;
+void renamePayload;
 void rename;
 const modifiedTime: Temporal.Instant = WatchrStats.synthetic(false).modifiedTime;
 void modifiedTime;

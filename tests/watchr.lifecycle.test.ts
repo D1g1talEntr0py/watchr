@@ -3,7 +3,7 @@ import type { FSWatcher } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import Watchr, { WatchrStats, type WatchrEvent, type WatchrOptions } from '../src/watchr';
+import { Watchr, WatchrStats, type WatchrEvent, type WatchrOptions } from '../src/watchr';
 import { FileSystem } from '../src/file-system';
 import { FileSystemStateManager } from '../src/file-system-state-manager';
 import { FileSystemEventManager } from '../src/file-system-event-manager';

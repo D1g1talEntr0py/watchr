@@ -1,6 +1,6 @@
 import { describe, expectTypeOf, it } from 'vitest';
 import { Watchr, type WatchrEventMap, type WatchrOptions, type WatchrHandlers, type WatchrHandlerOptions, type WatchrEventHandler, type WatchrEvent, type WatchrPathEvent, type WatchrRenameEvent, type WatchrState, type WatchIgnore, type Path, type WatchrStats } from '../src/watchr';
-import type { WatchrAddEvent, WatchrAddDirEvent, WatchrChangeEvent, WatchrUnlinkEvent, WatchrUnlinkDirEvent, WatchrRenameFileEvent, WatchrRenameDirectoryEvent } from '../src/watchr';
+import type { WatchrAddEvent, WatchrAddDirEvent, WatchrChangeEvent, WatchrUnlinkEvent, WatchrUnlinkDirEvent, WatchrRenameFileEvent, WatchrRenameDirectoryEvent, WatchrErrorHandler, WatchrErrorHandlerOptions, WatchrCloseHandler, WatchrCloseHandlerOptions } from '../src/watchr';
 
 describe('Watchr typings', () => {
 	const watcher = new Watchr('.');
@@ -16,7 +16,7 @@ describe('Watchr typings', () => {
 	});
 
 	it('types standalone handlers and their options', () => {
-		const add: WatchrEventHandler<'add'> = (event) => {
+		const add: WatchrEventHandler<WatchrAddEvent> = (event) => {
 			expectTypeOf(event).toEqualTypeOf<WatchrEventMap['add']>();
 			expectTypeOf(event.type).toEqualTypeOf<'add'>();
 			expectTypeOf(event.path).toEqualTypeOf<Path>();
@@ -27,7 +27,7 @@ describe('Watchr typings', () => {
 			// @ts-expect-error ordinary events have no rename destination
 			void event.to;
 		};
-		const once: WatchrHandlerOptions<'add'> = { handler: add, once: true };
+		const once: WatchrHandlerOptions<WatchrAddEvent> = { handler: add, once: true };
 		const handlers: WatchrHandlers = {
 			add: once,
 			rename: async (event) => {
@@ -43,12 +43,32 @@ describe('Watchr typings', () => {
 			close: (...args) => { expectTypeOf(args).toEqualTypeOf<[]>() }
 		};
 		expectTypeOf<WatchrEventMap['error']>().toEqualTypeOf<Error>();
-		expectTypeOf<Parameters<WatchrEventHandler<'close'>>>().toEqualTypeOf<[]>();
+		expectTypeOf<Parameters<WatchrCloseHandler>>().toEqualTypeOf<[]>();
+		expectTypeOf<Parameters<WatchrErrorHandler>>().toEqualTypeOf<[error: Error]>();
+		expectTypeOf<WatchrErrorHandlerOptions['handler']>().toEqualTypeOf<WatchrErrorHandler>();
+		expectTypeOf<WatchrCloseHandlerOptions['handler']>().toEqualTypeOf<WatchrCloseHandler>();
+		expectTypeOf<Parameters<WatchrEventHandler<WatchrAddEvent | WatchrChangeEvent>>>().toEqualTypeOf<[event: WatchrAddEvent | WatchrChangeEvent]>();
+		expectTypeOf<WatchrHandlerOptions['handler']>().toEqualTypeOf<WatchrEventHandler>();
+		// @ts-expect-error an add-only callback cannot handle changes
+		const mismatched: WatchrHandlers = { change: add };
+		void mismatched;
+		// @ts-expect-error handler parameters are payload types, not event names
+		type StringHandler = WatchrEventHandler<'all'>;
+		// @ts-expect-error handler option parameters are payload types, not event names
+		type StringOptions = WatchrHandlerOptions<'add'>;
+		expectTypeOf<StringHandler>().toBeFunction();
+		expectTypeOf<StringOptions>().toBeObject();
+		// @ts-expect-error errors are not filesystem event payloads
+		type ErrorEventHandler = WatchrEventHandler<Error>;
+		// @ts-expect-error closure is not a filesystem event payload
+		type CloseEventHandler = WatchrEventHandler<undefined>;
+		expectTypeOf<ErrorEventHandler>().toBeFunction();
+		expectTypeOf<CloseEventHandler>().toBeFunction();
 		new Watchr('.', { handlers }).close();
 	});
 
 	it('narrows the all channel by its discriminant', () => {
-		const all: WatchrEventHandler<'all'> = (event) => {
+		const all: WatchrEventHandler = (event) => {
 			expectTypeOf(event).toEqualTypeOf<WatchrEvent>();
 			if (event.type === 'rename' || event.type === 'renameDir') {
 				expectTypeOf(event).toEqualTypeOf<WatchrRenameEvent>();

@@ -55,12 +55,23 @@ type WatchrEventMap = {
 	error: Error;
 	close: undefined;
 };
-/** A configured callback; returned promises are observed but never awaited. */
-type WatchrEventHandler<K extends keyof WatchrEventMap> = (...args: K extends 'close' ? [] : [event: WatchrEventMap[K]]) => void | PromiseLike<void>;
+/** A filesystem event callback; returned promises are observed but never awaited. */
+type WatchrEventHandler<Payload extends WatchrEvent = WatchrEvent> = (event: Payload) => void | PromiseLike<void>;
+/** Reports operational failures and application callback failures. */
+type WatchrErrorHandler = (error: Error) => void | PromiseLike<void>;
+/** Runs when the watcher closes. */
+type WatchrCloseHandler = () => void | PromiseLike<void>;
 /** Options for a callback consumed before its first invocation when `once` is true. */
-type WatchrHandlerOptions<K extends keyof WatchrEventMap> = { handler: WatchrEventHandler<K>, once?: boolean };
+type WatchrHandlerOptions<Payload extends WatchrEvent = WatchrEvent> = { handler: WatchrEventHandler<Payload>, once?: boolean };
+/** Options for an error callback. */
+type WatchrErrorHandlerOptions = { handler: WatchrErrorHandler, once?: boolean };
+/** Options for a close callback. */
+type WatchrCloseHandlerOptions = { handler: WatchrCloseHandler, once?: boolean };
 /** Optional callbacks for filesystem events and lifecycle notifications. */
-type WatchrHandlers = { [K in keyof WatchrEventMap]?: WatchrEventHandler<K> | WatchrHandlerOptions<K> };
+type WatchrHandlers = { [K in WatchrEvent['type'] | 'all']?: WatchrEventHandler<WatchrEventMap[K]> | WatchrHandlerOptions<WatchrEventMap[K]> } & {
+	error?: WatchrErrorHandler | WatchrErrorHandlerOptions;
+	close?: WatchrCloseHandler | WatchrCloseHandlerOptions;
+};
 
 type Path = string;
 type NodeError = NodeJS.ErrnoException;
@@ -188,6 +199,10 @@ export type {
 	WatchrRenameDirectoryEvent,
 	WatchrEventHandler,
 	WatchrHandlerOptions,
+	WatchrErrorHandler,
+	WatchrErrorHandlerOptions,
+	WatchrCloseHandler,
+	WatchrCloseHandlerOptions,
 	WatchrHandlers,
 	WatchrOptions,
 	NormalizedWatchrOptions,

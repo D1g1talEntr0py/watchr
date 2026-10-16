@@ -101,26 +101,37 @@ Each file-system handler receives one object. All paths are absolute UTF-8 strin
 
 ### Typed Handlers
 
-Use the exported types when handlers or options are reused. This TypeScript ES module watches multiple existing targets for the application's lifetime and uses `using` for cleanup. The one-shot handler receives the first observed file, including an initial one.
+Use the exported types when handlers or options are reused. `WatchrEventHandler` defaults to all file-system events; its optional type parameter is a file-system payload type, not an event-name string. Errors and closure have separate, non-generic callback types: `WatchrErrorHandler` and `WatchrCloseHandler`.
+
+This TypeScript ES module watches multiple existing targets for the application's lifetime and uses `using` for cleanup. The one-shot handler receives the first observed file, including an initial one.
 
 ```typescript
 import {
   Watchr,
+  type WatchrAddEvent,
+  type WatchrCloseHandler,
+  type WatchrErrorHandler,
   type WatchrEventHandler,
   type WatchrHandlerOptions,
   type WatchrOptions
 } from '@d1g1tal/watchr';
 
-const logEvent: WatchrEventHandler<'all'> = (event) => {
+const logEvent: WatchrEventHandler = (event) => {
   if (event.type === 'rename' || event.type === 'renameDir') {
     console.log(event.type, event.from, event.to);
   } else {
     console.log(event.type, event.path, event.stats.size, event.initial);
   }
 };
-const firstFile: WatchrHandlerOptions<'add'> = {
+const firstFile: WatchrHandlerOptions<WatchrAddEvent> = {
   handler: ({ path }) => console.log('First observed file:', path),
   once: true
+};
+const reportError: WatchrErrorHandler = (error) => {
+  console.error('Watcher error:', error);
+};
+const reportClose: WatchrCloseHandler = () => {
+  console.log('Watcher closed');
 };
 const options: WatchrOptions = {
   emitInitial: true,
@@ -128,7 +139,8 @@ const options: WatchrOptions = {
   handlers: {
     all: logEvent,
     add: firstFile,
-    error: (error) => console.error('Watcher error:', error)
+    error: reportError,
+    close: reportClose
   }
 };
 
@@ -148,6 +160,8 @@ try {
   process.removeListener('SIGTERM', shutdown);
 }
 ```
+
+`WatchrHandlerOptions<Payload>` wraps only file-system callbacks. For error and close callbacks, use `WatchrErrorHandlerOptions` and `WatchrCloseHandlerOptions`; each provides `{ handler, once?: boolean }` with its corresponding callback type. Inline callbacks infer their argument types from the handler property and need no explicit annotation.
 
 ### When Manual Cleanup Fits
 
@@ -219,13 +233,15 @@ With `followSymlinks: true`, scanned symlink entries use the target's stats with
 
 Pass `abortSignal` to application operations that should cancel when the watcher closes. No external abort-signal option is provided.
 
-Public exports include `Watchr`, `WatchrStats`, and the useful `FileSystemEvent` constant. Use these exported types directly:
+All exports are named; import the watcher with `import { Watchr } from '@d1g1tal/watchr'`. There is no default export. Runtime exports are `Watchr`, `WatchrStats`, `FileSystemEvent`, `FileEvent`, and `DirectoryEvent`. Use these exported types directly:
 
 - `WatchrOptions`, `WatchrHandlers`: configuration and optional subscriptions.
-- `WatchrEventHandler<K>`, `WatchrHandlerOptions<K>`: a typed function and its `{ handler, once? }` form.
+- `WatchrEventHandler`, `WatchrHandlerOptions`: a callback for all file-system events and its `{ handler, once? }` form. Both default to `WatchrEvent`. Supply a file-system payload type for narrower callbacks, such as `WatchrEventHandler<WatchrAddEvent>` or `WatchrHandlerOptions<WatchrRenameEvent>`. Neither accepts `Error` or `undefined` as a payload type.
+- `WatchrErrorHandler`, `WatchrErrorHandlerOptions`: an error callback receiving an `Error` and its options.
+- `WatchrCloseHandler`, `WatchrCloseHandlerOptions`: a no-argument close callback and its options.
 - `WatchrEvent`, `WatchrPathEvent`, `WatchrRenameEvent`: the file-system union and its payload variants.
 - `WatchrAddEvent`, `WatchrAddDirEvent`, `WatchrChangeEvent`, `WatchrUnlinkEvent`, `WatchrUnlinkDirEvent`, `WatchrRenameFileEvent`, `WatchrRenameDirectoryEvent`: individual event payloads.
-- `WatchrEventMap`: payloads keyed by handler name, not EventEmitter argument tuples.
+- `WatchrEventMap`: payloads keyed by configured handler name, not EventEmitter argument tuples. It includes `all: WatchrEvent`, `error: Error`, and `close: undefined`; the close callback itself receives no arguments. The map does not make errors or closure file-system events.
 - `WatchrState`, `WatchIgnore`, `Path`: lifecycle state, ignore matchers, and string paths.
 
 Watchr does not inherit from EventEmitter. There are no `on`, `once`, `off`, `emit`, third constructor callback, static startup aliases, or `ready` event. The `once` option belongs to a configured handler, not a watcher method.
@@ -248,6 +264,7 @@ Handle startup rejection with `try` / `catch` and later failures with `handlers.
 
 | Previous API | Replacement |
 |---|---|
+| Default import | Named import: `import { Watchr } from '@d1g1tal/watchr'` |
 | `watchr.on('change', (stats, path) => ...)` | `options.handlers.change: ({ path, stats }) => ...` |
 | `watchr.once('add', callback)` | `handlers.add: { handler: callback, once: true }` |
 | `.off()`, `.removeAllListeners()` for cleanup | `close()` releases all configured handler references |
@@ -263,7 +280,9 @@ Handle startup rejection with `try` / `catch` and later failures with `handlers.
 | Array ignore callback called with basename too | Callback receives only the full absolute path |
 | Startup rejection also delivered to `error` | Catch the rejection; no duplicate error callback |
 | Unobserved async listener rejection | Handler promises are observed and failures reported |
-| `Handler` / tuple-based `WatchrEventMap` | `WatchrEventHandler<K>` / payload-based `WatchrEventMap` |
+| `Handler` / tuple-based `WatchrEventMap` | `WatchrEventHandler` / payload-based `WatchrEventMap` |
+| Event-name handler type parameters | Payload types: `WatchrEventHandler` for all events, `WatchrEventHandler<WatchrAddEvent>` for additions; the same applies to `WatchrHandlerOptions` |
+| Error and close handler type parameters | Dedicated `WatchrErrorHandler` / `WatchrCloseHandler` and their corresponding options types |
 
 Move subscriptions into the constructor options before calling `start()`. Initial synchronous callbacks now finish before startup resolves; asynchronous application work still does not. Update wrappers and test helpers too.
 

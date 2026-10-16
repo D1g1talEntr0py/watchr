@@ -773,6 +773,5 @@ class Watchr implements Closable {
 	}
 }
 
-export default Watchr;
 export { Watchr, WatchrStats, FileSystemEvent, FileEvent, DirectoryEvent };
-export type { WatchrOptions, WatchrHandlers, WatchrHandlerOptions, WatchrEventHandler, WatchrEvent, WatchrEventMap, WatchrPathEvent, WatchrRenameEvent, WatchrState, WatchIgnore, Path, WatchrAddEvent, WatchrAddDirEvent, WatchrChangeEvent, WatchrUnlinkEvent, WatchrUnlinkDirEvent, WatchrRenameFileEvent, WatchrRenameDirectoryEvent } from './@types/index';
+export type { WatchrOptions, WatchrHandlers, WatchrHandlerOptions, WatchrEventHandler, WatchrErrorHandler, WatchrErrorHandlerOptions, WatchrCloseHandler, WatchrCloseHandlerOptions, WatchrEvent, WatchrEventMap, WatchrPathEvent, WatchrRenameEvent, WatchrState, WatchIgnore, Path, WatchrAddEvent, WatchrAddDirEvent, WatchrChangeEvent, WatchrUnlinkEvent, WatchrUnlinkDirEvent, WatchrRenameFileEvent, WatchrRenameDirectoryEvent } from './@types/index';

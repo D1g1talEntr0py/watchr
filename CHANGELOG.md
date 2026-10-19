@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.0.0](https://github.com/D1g1talEntr0py/watchr/compare/v5.0.0...v6.0.0) - 2026-10-19
+
+
+### Breaking Changes
+* **api:** default to no-wait batch rename matching ([1e42453](https://github.com/D1g1talEntr0py/watchr/commit/1e42453252e914b7850925554457899a77c436f8))
+
+
+### Features
+* **watcher:** add stable closed promise to Watchr for cleanup synchronization ([baefabd](https://github.com/D1g1talEntr0py/watchr/commit/baefabddbaf74a60cda00e68f868e138baaa825d))
+
+
+### Bug Fixes
+* **filesystem:** make stat retries cancellation-safe ([c428656](https://github.com/D1g1talEntr0py/watchr/commit/c428656bfa71ca62db1321d01fea7816a7284d75))
+
+
+### Performance Improvements
+* **lock-resolver:** schedule resolvers at their deadlines ([b9bad43](https://github.com/D1g1talEntr0py/watchr/commit/b9bad43ed32e0a7c625399ceffb7d1e0a8309fd4))
+
+
+
+
+
+### Chores
+* **bench:** expand coverage and isolate benchmark dependencies ([913b614](https://github.com/D1g1talEntr0py/watchr/commit/913b614f942318f8d9d66487edf744ba74574455))
+
+### Chores
+* **deps:** update dependencies and pnpm ([75df267](https://github.com/D1g1talEntr0py/watchr/commit/75df267a9d59fced0c457a2ba25945e7666de824))
+
+
+
+
+
+
+
 ## [5.0.0](https://github.com/D1g1talEntr0py/watchr/compare/v4.0.0...v5.0.0) - 2026-10-16
 
 
@@ -17,6 +51,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+### Chores
+* **release:** 5.0.0 [skip ci] ([de80efa](https://github.com/D1g1talEntr0py/watchr/commit/de80efa63eeb6a5f1c4b8a0e86e0bec0ba027c6f))
 
 
 

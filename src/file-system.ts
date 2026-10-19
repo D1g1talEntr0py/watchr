@@ -1,5 +1,5 @@
-import { lstatSync, statSync } from 'node:fs';
-import { lstat, readdir, realpath, stat } from 'node:fs/promises';
+import { lstatSync, statSync, stat } from 'node:fs';
+import { lstat, readdir, realpath } from 'node:fs/promises';
 import { join, normalize, sep } from 'node:path';
 import { raceWithAbort } from './utils';
 import { RetryQueue } from './retry-queue';
@@ -8,7 +8,7 @@ import { setTimeout as setAsyncTimeout } from 'node:timers/promises';
 import type { DirectoryReadOptions, NodeError, NodeErrorCode, StatOptions, Stats } from './@types/index';
 
 const maxConcurrentDirectoryReads = 8;
-const missingStat = Symbol('missing-stat');
+const STAT_MISSING = Symbol('missing-stat');
 const retryErrorCodes: Set<NodeErrorCode> = new Set([ 'EMFILE', 'ENFILE', 'EAGAIN', 'EBUSY', 'EACCESS', 'EACCES', 'EACCS', 'EPERM' ]);
 const recursiveReadUnsupportedErrorCodes = new Set([ 'ERR_INVALID_ARG_VALUE', 'ERR_INVALID_OPT_VALUE' ]);
 
@@ -27,9 +27,7 @@ export class FileSystem {
 	static readonly #retryQueue = new RetryQueue();
 	static readonly #maxStatRetries = 10;
 
-	private constructor () {
-		throw new Error('This class cannot be instantiated');
-	}
+	private constructor () { throw new Error('This class cannot be instantiated') }
 
 	/**
 	 * Reads the contents of a directory.
@@ -57,11 +55,7 @@ export class FileSystem {
 		const addSymlink = async (subPath: string): Promise<boolean> => {
 			let stats: Stats | undefined;
 
-			try {
-				stats = await FileSystem.getStats(subPath, { signal });
-			} catch {
-				return false;
-			}
+			try { stats = await FileSystem.getStats(subPath, { signal }) } catch { return false }
 
 			if (signal?.aborted || stats === undefined) { return false }
 
@@ -105,9 +99,9 @@ export class FileSystem {
 			const readNextDirectory = async () => {
 				while (!signal?.aborted) {
 					const currentPath = pendingDirectories.shift();
-					if (currentPath === undefined) { return }
 
-					if (signal?.aborted) { return }
+					if (currentPath === undefined || signal?.aborted) { return }
+
 					const subPathPrefix = `${currentPath}${currentPath === sep ? '' : sep}`;
 					const entries = await readdir(currentPath, { withFileTypes: true });
 
@@ -136,10 +130,9 @@ export class FileSystem {
 			try {
 				if (signal?.aborted) { return true }
 
-				const entries = await readdir(rootPath, { recursive, withFileTypes: true });
 				const symlinkedDirectories: string[] = [];
 
-				for (const entry of entries) {
+				for (const entry of await readdir(rootPath, { recursive, withFileTypes: true })) {
 					if (signal?.aborted) { break }
 
 					const subPath = normalize(join(typeof entry.parentPath === 'string' ? entry.parentPath : rootPath, entry.name));
@@ -199,28 +192,28 @@ export class FileSystem {
 		if (sync === true) {
 			if (signal?.aborted) { throw new DOMException('The operation was aborted', 'AbortError') }
 
-			try {
-				return statSync(targetPath, { bigint: true, throwIfNoEntry: false });
-			} catch (error: unknown) {
+			try { return statSync(targetPath, { bigint: true, throwIfNoEntry: false }) } catch (error: unknown) {
 				if (isNodeError(error) && error.code === 'ENOTDIR') { return undefined }
+
 				if (!isNodeError(error) || !retryErrorCodes.has(error.code)) { throw error }
 			}
 		}
 
 		const timeoutSignal = timeout === undefined ? undefined : AbortSignal.timeout(timeout);
+
 		if (timeoutSignal !== undefined) {
 			signal = signal === undefined ? timeoutSignal : AbortSignal.any([ signal, timeoutSignal ]);
 		}
 
 		const result = await FileSystem.#getStatsWithRetries(targetPath, signal);
 
-		if (result === missingStat) { return undefined }
+		if (result === STAT_MISSING) { return undefined }
 
 		if (result === undefined) {
 			if (timeoutSignal?.aborted) {
-				const timeoutReason: unknown = timeoutSignal.reason;
-				const error = new Error(`Stat operation timed out after ${timeout}ms`, { cause: { targetPath, reason: timeoutReason } });
+				const error = new Error(`Stat operation timed out after ${timeout}ms`, { cause: { targetPath, reason: timeoutSignal.reason as unknown } });
 				error.name = 'TimeoutError';
+
 				throw Object.assign(error, { code: 'WATCHR_STAT_TIMEOUT' });
 			}
 
@@ -238,11 +231,10 @@ export class FileSystem {
 	 * @param signal - Optional cancellation signal; stops retrying once aborted.
 	 * @returns Stats, the missing sentinel, or undefined when cancellation wins.
 	 */
-	static async #getStatsWithRetries(targetPath: string, signal?: AbortSignal): Promise<Stats | typeof missingStat | undefined> {
+	static async #getStatsWithRetries(targetPath: string, signal?: AbortSignal): Promise<Stats | typeof STAT_MISSING | undefined> {
 		let retries = 0;
 
-		const handleRejection = async (error: unknown): Promise<Stats | typeof missingStat | undefined> => {
-			if (isNodeError(error) && (error.code === 'ENOENT' || error.code === 'ENOTDIR')) { return missingStat }
+		const handleRejection = async (error: unknown): Promise<Stats | typeof STAT_MISSING | undefined> => {
 			if (!isNodeError(error) || !retryErrorCodes.has(error.code)) { throw error }
 
 			if (retries >= FileSystem.#maxStatRetries) { throw error }
@@ -253,7 +245,7 @@ export class FileSystem {
 			retries++;
 
 			try {
-				await setAsyncTimeout(~~(Math.random() * 100), { signal });
+				await setAsyncTimeout(~~(Math.random() * 100), undefined, { signal });
 			} catch (sleepError: unknown) {
 				if (signal?.aborted) { return }
 
@@ -271,26 +263,28 @@ export class FileSystem {
 		 * @param requestSignal - Signal used for this individual retry attempt.
 		 * @returns A promise that resolves to the stats or undefined if not found.
 		 */
-		const attemptStat = async (targetPath: string, requestSignal: AbortSignal | undefined = signal): Promise<Stats | typeof missingStat | undefined> => {
+		const attemptStat = async (targetPath: string, requestSignal: AbortSignal | undefined = signal): Promise<Stats | typeof STAT_MISSING | undefined> => {
 			// Each attempt takes its own queue slot so retries stay throttled under descriptor pressure.
 			try {
 				using _queueLease = await FileSystem.#retryQueue.schedule(requestSignal);
 
 				if (requestSignal?.aborted) { return }
 
-				const result = await raceWithAbort(stat(targetPath, { bigint: true }), requestSignal);
+				const result = await raceWithAbort(new Promise<Stats | typeof STAT_MISSING>((resolve, reject) => {
+					stat(targetPath, { bigint: true }, (error, stats) => {
+						if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') { return void resolve(STAT_MISSING) }
 
-				if (requestSignal?.aborted) { return }
+						if (error !== null) { reject(error) } else { resolve(stats) }
+					});
+				}), requestSignal);
 
-				return result;
+				return requestSignal?.aborted ? undefined : result;
 			} catch (error: unknown) {
 				return handleRejection(error);
 			}
 		};
 
-		try {
-			return await attemptStat(targetPath);
-		} catch (error: unknown) {
+		try { return await attemptStat(targetPath) } catch (error: unknown) {
 			if (signal?.aborted) { return }
 
 			throw error;

@@ -18,6 +18,7 @@ const abortReason = (signal: AbortSignal): Error => signal.reason instanceof Err
  */
 export const raceWithAbort = <T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> => {
 	if (signal === undefined) { return promise }
+
 	if (signal.aborted) { return Promise.reject(abortReason(signal)) }
 
 	return new Promise<T>((resolve, reject) => {

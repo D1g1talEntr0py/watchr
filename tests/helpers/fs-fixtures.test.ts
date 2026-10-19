@@ -31,7 +31,7 @@ describe('constructor-time test recording', () => {
 		const from = join(root, 'before.txt');
 		const to = join(root, 'after.txt');
 		writeFileSync(from, 'value');
-		const watcher = await createReadyWatcher(root);
+		const watcher = await createReadyWatcher(root, { renameTimeout: 25 });
 		const renamed = vi.fn();
 		observeEvent(watcher, 'rename', renamed, true);
 		const { events } = collectEvents(watcher);

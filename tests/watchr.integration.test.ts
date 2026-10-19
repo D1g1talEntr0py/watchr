@@ -202,7 +202,7 @@ describe('Watchr integration', () => {
 		writeFileSync(oldPath, 'contents');
 		const inode = inodeOf(oldPath);
 
-		const watcher = await createWatcher(watchDir);
+		const watcher = await createWatcher(watchDir, { renameTimeout: 25 });
 		const eventPromise = waitForEvent(watcher, 'rename');
 
 		renameSync(oldPath, newPath);
@@ -237,7 +237,7 @@ describe('Watchr integration', () => {
 		mkdirSync(oldPath);
 		const inode = inodeOf(oldPath);
 
-		const watcher = await createWatcher(watchDir);
+		const watcher = await createWatcher(watchDir, { renameTimeout: 25 });
 		const eventPromise = waitForEvent(watcher, 'renameDir');
 
 		renameSync(oldPath, newPath);

@@ -594,7 +594,7 @@ describe('Watchr', () => {
 		it('should emit events for consecutive atomic saves on a watched file path', async () => {
 			createTestFile('atomic.txt', 'initial content');
 			const filePath = join(testDir, 'atomic.txt');
-			const watchr = createWatcher(filePath, { emitInitial: false, renameTimeout: 50 });
+			const watchr = createWatcher(filePath, { emitInitial: false, renameTimeout: 0 });
 			await watchr.start();
 
 			const waitForFileEvent = () => new Promise<void>((resolve, reject) => {
@@ -650,7 +650,7 @@ describe('Watchr', () => {
 
 		it('should emit "rename" event for file renames', async () => {
 			createTestFile('old.txt');
-			const watchr = createWatcher(testDir, { emitInitial: false, renameTimeout: 50 });
+			const watchr = createWatcher(testDir, { emitInitial: false, renameTimeout: 25 });
 			await watchr.start();
 
 			const eventPromise = new Promise<void>((resolve) => {

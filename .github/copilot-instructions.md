@@ -17,7 +17,7 @@ Key modules:
 - [src/watchr.ts](../src/watchr.ts): public API, watcher lifecycle, startup barrier, handler ownership and cancellation
 - [src/file-system-event-manager.ts](../src/file-system-event-manager.ts): per-watcher event batching, deduplication, initial scan wiring
 - [src/file-system-state-manager.ts](../src/file-system-state-manager.ts): stat diffing, event derivation, inode/path tracking
-- [src/file-rename-handler.ts](../src/file-rename-handler.ts): rename correlation via inode locks
+- [src/file-rename-handler.ts](../src/file-rename-handler.ts): completed-batch rename classification, with optional timed cross-batch correlation
 - [src/file-system.ts](../src/file-system.ts): recursive reads and stat retrieval with retries
 - [src/lock-resolver.ts](../src/lock-resolver.ts): shared interval timeout resolver with bounded capacity
 
@@ -39,7 +39,7 @@ Test support:
 
 ## Behavioral Details That Matter
 
-- Defaults ([src/constants.ts](../src/constants.ts)): `recursive: true`, `persistent: true`, `emitInitial: false`, `renameTimeout: 150ms`, `statTimeout: 1000ms` (live polls only; the initial scan has no per-stat timeout), `fallbackScanInterval: 50ms`, `followSymlinks: true`. Paths are absolute UTF-8 strings; `encoding` and `throwIfNoEntry` are removed.
+- Defaults ([src/constants.ts](../src/constants.ts)): `recursive: true`, `persistent: true`, `emitInitial: false`, `renameTimeout: 0ms`, `statTimeout: 1000ms` (live polls only; the initial scan has no per-stat timeout), `fallbackScanInterval: 50ms`, `followSymlinks: true`. Paths are absolute UTF-8 strings; `encoding` and `throwIfNoEntry` are removed.
 - Required target: a nonempty string or nonempty array of nonempty strings, validated synchronously. Construction is idle; `start(): Promise<this>` is the only startup operation. It resolves the instance after attachment, scan, and requested synchronous initial callbacks, never after asynchronous application work. State is `idle | starting | watching | closed`; no readiness event or EventEmitter inheritance/methods.
 - `options.handlers` is the only subscription mechanism: optional `add`, `addDir`, `change`, `unlink`, `unlinkDir`, `rename`, `renameDir`, `all`, `error`, `close`. Each accepts a function or `{ handler, once?: boolean }`; consume `once` before invocation (initial events count when enabled).
 - Path payloads are `{ type, path, stats, initial }`; rename payloads are `{ type, from, to, stats, initial: false }`; `all` receives their discriminated union, `error` an Error, and `close` no arguments. `WatchrEventHandler<Payload>` and `WatchrHandlerOptions<Payload>` accept only file-system payload types and default to `WatchrEvent`; never supply event-name strings, `Error`, or `undefined`. Errors use `WatchrErrorHandler` / `WatchrErrorHandlerOptions`; closure uses `WatchrCloseHandler` / `WatchrCloseHandlerOptions`. `WatchrHandlers` infers inline callback signatures. Use these exported types plus `WatchrOptions`, `WatchrEventMap`, `WatchrPathEvent`, `WatchrRenameEvent`, `WatchrState`, `WatchIgnore`, and `Path` directly; old `Handler` is not public.
@@ -48,9 +48,9 @@ Test support:
 - `using watcher = await new Watchr(target, { handlers }).start()` must remain in an open application scope (for example, await a shutdown promise). Plain `const` plus application teardown or `finally` is equally valid.
 - Fatal startup failures (missing targets, directory setup/scan failures) reject `start()` and automatically close, without duplicate `error` delivery. Per-stat failures report `error`, skip the path and continue. Native operational errors and handler throws/rejections report safely to `error`; callback promises are observed, not awaited.
 - Ignore callbacks always receive the full absolute path, including array entries; do not invoke them again with basename. Callbacks are synchronous; strings/globs and regex match full path and basename.
-- Rename detection correlates `unlink` + `add` by inode, with separate file/dir lock stores. An `add` is held only if its inode was vacated by a tracked path within `renameTimeout` (`FileSystemStateManager.wasVacatedWithin`); brand-new inodes emit immediately. A `change` arriving while an `add` for the same path is held is folded into that `add`.
+- Default zero-timeout rename detection classifies each completed batch before dispatch: only an unambiguous one-to-one removal/addition pair at different paths with matching inode and kind becomes `rename`/`renameDir`. It uses the event tuple's stats, not event-inode history; ambiguous or split-batch pairs remain plain events, with no post-hoc rename or timed hold. Native batching is not guaranteed to retain both endpoints. Positive `renameTimeout` opts into the existing file/dir inode locks and delayed cross-batch correlation; start with `25` and tune for the workload. Configure state-manager retention before recording removals. Only recently vacated-inode additions are held, brand-new inodes emit immediately, and changes during held additions fold into them. Initial inventory bypasses both policies.
 - Initial scan stats paths with blocking `statSync` (`StatOptions.sync`), sequentially, yielding to the event loop every 8ms; retryable errors fall back to the async `RetryQueue` path.
-- `FileSystemEventManager` batches through a microtask and deduplicates by event priority; the fallback scan is bounded to one in flight per manager and aborted on cleanup.
+- `FileSystemEventManager` admits default live notifications synchronously, batches through a microtask, and deduplicates by event priority before whole-batch classification. Initial inventory and custom handlers retain asynchronous awaiting. The fallback scan is bounded to one in flight per manager and aborted on cleanup.
 - Root lifecycle: a deleted watched root emits `unlinkDir`, then is retried with backoff `[100, 250, 500, 1000, 2000]ms` (unref'd timers) until it reappears (`addDir` + rescan) or `close()`.
 - Safe dispatch: missing or throwing/rejecting error handlers produce `process.emitWarning`, not recursive error dispatch or an uncaught exception from a timer. Handler promise rejections must be observed.
 - Watcher errors are sanitized before emission.
@@ -95,6 +95,7 @@ Benchmark notes:
 Testing notes:
 - Vitest config is in [vitest.config.ts](../vitest.config.ts); worker forks run with `--expose-gc` so `tests/memory.test.ts` can measure retained heap.
 - Configure test handlers before `await watcher.start()`; initial synchronous callbacks finish before it resolves. Use `createWatcher` for test-owned recording and `createReadyWatcher` when no pre-start assertions are needed. Do not use EventEmitter subscriptions or wait for a readiness event.
+- Test recording helpers explicitly use `renameTimeout: 0` unless overridden. Use `25` for timed rename tests, retaining explicit zero/omitted-value cases that verify the no-wait library default. Use fake clocks and event barriers for correlation-window assertions rather than short wall-clock polling deadlines.
 - Always close watchers in cleanup paths (`tests/helpers/fs-fixtures.ts` tracks and closes them for you).
 - Coverage reports to `tests/coverage`.
 

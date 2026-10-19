@@ -240,7 +240,7 @@ class Watchr implements Closable {
 		this.#abortController.abort();
 		this.#startReject(new Error('watcher closed before becoming ready.'));
 		this.#startReject = noop;
-		this.#renameHandler.reset();
+		this.#renameHandler.close();
 		this.#roots.clear();
 		this.#watchersClose();
 		this.#clearRestorableWatchers();
@@ -473,7 +473,7 @@ class Watchr implements Closable {
 
 			return eventManager;
 		} catch (error: unknown) {
-			config.eventManager?.cleanup();
+			config.eventManager?.close();
 			this.#removeWatcherConfig(config);
 			config.watcher.close();
 			throw error;
@@ -667,7 +667,7 @@ class Watchr implements Closable {
 	 * @param config The config for the watcher
 	 */
 	#watcherClose(config: WatchrConfig) {
-		config.eventManager?.cleanup();
+		config.eventManager?.close();
 		config.watcher.close();
 		this.#removeWatcherConfig(config);
 

@@ -1,6 +1,6 @@
 /// <reference types="node" />
 // End-to-end comparison: watchr (dist) vs chokidar vs @parcel/watcher, with raw `fs.watch` as reference.
-// Usage: pnpm bench:compare [--runs 3] [--ops 100] [--burst-ops 500] [--mitata] [--output report.json]
+// Usage: pnpm bench:compare [--runs 3] [--ops 100] [--burst-ops 500] [--rename-timeout 0] [--mitata] [--output report.json]
 //
 // `baseline.json` is per-machine. `--ci` compares watchr's readiness and bytes/path against it and exits 1 on a regression
 // above `--tolerance`; when the baseline came from another machine the regressions are reported as warnings only.
@@ -14,7 +14,7 @@ import { parseArgs, styleText } from 'node:util';
 import { Watchr } from '../../dist/watchr.js';
 import { buildFlat, buildNested, median, percentile, requireGc, settleHeap, trackedPathCount } from './helpers.ts';
 import { installBenchmarkDependency, type BenchmarkDependencyName, type InstalledBenchmarkDependency } from './utils/benchmark-dependencies.ts';
-import { deliveryCounts, measureLifecycle, positiveInteger } from './utils/compare-metrics.ts';
+import { deliveryCounts, measureLifecycle, nonnegativeNumber, positiveInteger } from './utils/compare-metrics.ts';
 
 type EventKind = 'add' | 'change' | 'unlink' | 'rename' | 'other';
 type Emitted = { kind: EventKind, path: string, pathNext: string | undefined, at: number };
@@ -35,7 +35,7 @@ type BurstWorkload = 'create' | 'write' | 'delete';
 type RenameEntry = { correlated: number, pairs: number, unresolved: number, totalEvents: number, error?: string };
 type Verdict = { category: string, winners: string[], value: string, margin: string };
 type Report = {
-	meta: { schemaVersion: number, node: string, platform: string, cpus: string, date: string, versions: Record<string, string>, runs: number, ops: number, burstOps: number, quick: boolean },
+	meta: { schemaVersion: number, node: string, platform: string, cpus: string, date: string, versions: Record<string, string>, runs: number, ops: number, burstOps: number, renameTimeoutMs: number, quick: boolean },
 	readiness: ReadinessScenario[],
 	latency: Record<string, LatencyEntry>,
 	rename: Record<string, RenameEntry>,
@@ -53,6 +53,7 @@ const { values } = parseArgs({
 		runs: { type: 'string', default: '3' },
 		ops: { type: 'string', default: '100' },
 		'burst-ops': { type: 'string', default: '500' },
+		'rename-timeout': { type: 'string', default: '0' },
 		quick: { type: 'boolean', default: false },
 		mitata: { type: 'boolean', default: false },
 		output: { type: 'string' }
@@ -62,6 +63,7 @@ const { values } = parseArgs({
 const runs = positiveInteger(values.runs, 'runs');
 const ops = positiveInteger(values.ops, 'ops');
 const burstOps = positiveInteger(values['burst-ops'], 'burst-ops');
+const renameTimeoutMs = nonnegativeNumber(values['rename-timeout'], 'rename-timeout');
 const renameOps = Math.min(50, ops);
 const opGapMs = 20;
 const eventTimeoutMs = 2_000;
@@ -86,6 +88,9 @@ if (values.ci) {
 	ciBaseline = JSON.parse(readFileSync(baselinePath, 'utf8')) as Report;
 	if (ciBaseline.meta.schemaVersion !== 2 || ciBaseline.meta.quick !== false) {
 		throw new Error('Incompatible baseline methodology; record a fresh baseline with `pnpm bench:baseline`');
+	}
+	if (ciBaseline.meta.renameTimeoutMs !== renameTimeoutMs) {
+		throw new Error('Baseline rename timeout is missing or differs from --rename-timeout; use a matching baseline');
 	}
 }
 
@@ -144,6 +149,7 @@ function watchrAdapter(): Adapter {
 			const watcher = new Watchr(root, {
 				emitInitial: false,
 				recursive: true,
+				renameTimeout: renameTimeoutMs,
 				handlers: {
 					error: (error) => { failure ??= error.message },
 					all: (event) => {
@@ -842,6 +848,7 @@ function printReport(result: Report, tables: Table[]): void {
 	console.log(styleText('bold', 'watchr comparison benchmark'));
 	console.log(styleText('dim', `${meta.node} · ${meta.platform} · ${meta.cpus}`));
 	console.log(styleText('dim', Object.entries(meta.versions).map(([ name, version ]) => `${name} ${version}`).join(' · ')));
+	console.log(styleText('dim', `watchr renameTimeout: ${meta.renameTimeoutMs} ms`));
 	console.log(styleText('dim', `${styleText('green', '★')} marks the best ranked result in each column`));
 
 	for (const table of tables) { printTable(table) }
@@ -865,8 +872,8 @@ function printReport(result: Report, tables: Table[]): void {
 	const tally = [ ...wins ].sort((left, right) => right[1] - left[1]).map(([ name, total ]) => `${name} ${total}/${decided.length}`).join(' · ');
 	console.log(`  ${'Categories won'.padEnd(categoryWidth)}  ${styleText('bold', tally)}`);
 
-	console.log(styleText('dim', '\nAll watchers use their default options with initial events disabled and recursive watching on.'));
-	console.log(styleText('dim', 'chokidar delays unlinks by 100 ms (atomic); watchr holds an add only when its inode was just vacated.'));
+	console.log(styleText('dim', '\nInitial events are disabled and recursive watching is on; competitors otherwise use default options.'));
+	console.log(styleText('dim', 'chokidar delays unlinks by 100 ms (atomic); positive watchr rename timeouts hold unmatched unlinks and some recently vacated-inode adds.'));
 	console.log(styleText('dim', 'Warm process/filesystem cache, one adapter at a time. JS heap excludes native allocations; RSS is process-wide, not isolated.'));
 	console.log(styleText('dim', 'Latency misses mean the requested event kind was absent; "other kinds" counts those ops with alternative notifications. Bursts run once per workload.'));
 
@@ -883,7 +890,7 @@ function printReport(result: Report, tables: Table[]): void {
  */
 function findRegressions(current: Report, baseline: Report): string[] {
 	const failures: string[] = [];
-	if (baseline.meta.schemaVersion !== current.meta.schemaVersion || baseline.meta.quick !== current.meta.quick) {
+	if (baseline.meta.schemaVersion !== current.meta.schemaVersion || baseline.meta.quick !== current.meta.quick || baseline.meta.renameTimeoutMs !== current.meta.renameTimeoutMs) {
 		return [ 'incompatible benchmark methodology; record a fresh baseline with `pnpm bench:baseline`' ];
 	}
 
@@ -975,6 +982,7 @@ const report: Report = {
 		runs,
 		ops,
 		burstOps,
+		renameTimeoutMs,
 		quick: values.quick
 	},
 	readiness: [],

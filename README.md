@@ -75,7 +75,7 @@ The application-lifetime promise keeps the `using` scope open. On shutdown, leav
 
 `await watchr.start()` attaches native watchers, scans the configured targets, and resolves with the **same Watchr instance** in the `watching` state. Await it before making changes you need to observe. Repeated calls share one startup operation; there are no automatic constructors, factories, or readiness events. If any target fails startup, the whole instance closes and the promise rejects. Relative targets resolve from the working directory at startup; use absolute targets if your application changes directories.
 
-Existing entries are scanned even with the default `emitInitial: false`. Set `emitInitial: true` to receive initial `add` and `addDir` payloads with `initial: true`. Requested synchronous initial callbacks are fully delivered before `start()` resolves. Async callback promises are observed for failures, but their application work is **not awaited** by startup.
+Existing entries are scanned even with the default `emitInitial: false`. Set `emitInitial: true` to receive initial `add` and `addDir` payloads with `initial: true`; initial inventory bypasses rename correlation regardless of `renameTimeout`. Requested synchronous initial callbacks are fully delivered before `start()` resolves. Async callback promises are observed for failures, but their application work is **not awaited** by startup.
 
 `close()` is synchronous, idempotent, and terminal. It releases owned native watchers, timers, queues, and rename tracking, clears **all handler references, including inline functions**, and aborts `abortSignal`. The optional `close` handler runs once, without arguments. A closed watcher cannot restart; create a new instance. Closing during startup rejects its pending promise. Neither `close()` nor disposal waits for asynchronous application work already launched by handlers.
 
@@ -198,7 +198,11 @@ The application calls `initialize()` during startup and `shutdown()` during tear
 
 ### Rename Expectations
 
-An `unlink` and `add` with the same inode inside `renameTimeout` can become one `rename` or `renameDir`. Without correlation, expect separate removal and addition events; moves outside watched targets generally cannot be paired. Only additions whose inode was recently vacated are held for correlation; a brand-new inode emits immediately. A change during a held addition folds into that addition. `renameTimeout: 0` disables correlation.
+The default `renameTimeout: 0` adds no correlation wait. Within the same completed batch, only an unambiguous one-to-one removal/addition pair with the same inode and kind (file or directory) and different paths becomes `rename` or `renameDir`. Same-path replacements do not become renames; hard-link and other ambiguous many-to-one or one-to-many cases remain unpaired. A completed batch is Watchr's processed set of observed state changes, not necessarily all changes from one filesystem operation.
+
+Pairs split across completed batches emit separate removal and addition events (`unlink` / `unlinkDir` and `add` / `addDir`), with no later post-hoc rename notification in zero mode. Moves outside watched targets generally cannot be paired.
+
+For timed cross-batch rename detection, start with **25 ms**: `new Watchr(target, { renameTimeout: 25, handlers })`. Increase the window if your platform or workload splits matching notifications further apart; use `0` when immediate delivery matters more than cross-batch correlation. A positive timeout delays unmatched removals and can hold additions whose inode was recently vacated; brand-new inodes are not held. A change during a held addition folds into that addition, and a transient addition removed before delivery can be suppressed. This policy is not a guarantee of rename detection: native notification coalescing and inode reuse can prevent or mislead correlation.
 
 Native notifications can coalesce: these are observed state changes, not a log of every write. A `change` can mean content or metadata changed. Read the current file when handling an event.
 
@@ -211,7 +215,7 @@ Native notifications can coalesce: these are observed state changes, not a log o
 | `recursive` | `true` | Watch and scan nested directories; `false` limits both to direct children |
 | `persistent` | `true` | Keep Node running while native watchers are open |
 | `ignore` | None | Synchronous callback, string, RegExp, or an array of these |
-| `renameTimeout` | `150` | Rename correlation window in milliseconds |
+| `renameTimeout` | `0` | No-wait, unambiguous same-batch rename matching; positive milliseconds opt into timed cross-batch correlation |
 | `statTimeout` | `1000` | Per-stat timeout in milliseconds for live polls; no initial-scan stat timeout |
 | `fallbackScanInterval` | `50` | Minimum milliseconds between fallback root scans when notifications lack a usable filename |
 | `followSymlinks` | `true` | Include symlink targets under the link's own path; `false` skips links |
@@ -288,12 +292,16 @@ Handle startup rejection with `try` / `catch` and later failures with `handlers.
 
 Move subscriptions into the constructor options before calling `start()`. Initial synchronous callbacks now finish before startup resolves; asynchronous application work still does not. Update wrappers and test helpers too.
 
+### Rename Policy Change
+
+`renameTimeout` now defaults to `0`: zero enables no-wait, unambiguous matching within one completed batch rather than disabling correlation. Applications that relied on delayed cross-batch correlation must explicitly set a positive value; start with `renameTimeout: 25` and tune for your workload. Expect separate removal/addition events when zero-mode pairs span batches; already delivered events are not later reclassified as renames. See [Rename Expectations](#rename-expectations) for matching limits and timed-policy tradeoffs. `statTimeout` remains `1000`; the option names, constructor handlers, `start()`, and `close()` are unchanged by this policy change.
+
 ### Other Changes Since 3.x
 
 - Importing Watchr no longer installs global `Temporal`; the timestamp getters still return native or module-local polyfill instants. Add `import 'temporal-polyfill-lite/shim'` only if your application needs the global.
 - `recursive` defaults to `true`; `statTimeout`, `fallbackScanInterval`, and `followSymlinks` are available.
 - The `WatchrStats` constructor is private; use `fromStats()` or `synthetic()`. Nanosecond getters are available. Internal classes and members are not public.
-- A change can fold into an addition awaiting rename correlation; brand-new inodes are not held. Handler failures are reported safely rather than escaping watcher dispatch.
+- With a positive `renameTimeout`, a change can fold into an addition awaiting rename correlation; brand-new inodes are not held. Handler failures are reported safely rather than escaping watcher dispatch.
 
 ## Performance
 
@@ -312,7 +320,11 @@ Watchr startup times only `await watcher.start()`, excluding idle construction a
 pnpm bench:compare --mitata                   # additional construct/start/close distributions
 pnpm bench:compare --runs 5 --ops 100 --burst-ops 1000 --output /tmp/watchr-comparison.json
 pnpm bench:compare --quick --runs 1 --ops 3 --burst-ops 20  # small validation fixtures
+pnpm bench:compare --rename-timeout 10 --output /tmp/watchr-rename-10ms.json
+pnpm bench:compare --rename-timeout 25 --output /tmp/watchr-rename-25ms.json
 ```
+
+`--rename-timeout <ms>` configures Watchr's rename correlation window for every benchmark workload (default `0`; finite nonnegative values, including fractions, are accepted). Compare file/directory rename correlation alongside delete latency and throughput when lowering the window. Zero retains same-batch matching without waiting; positive values opt into delayed cross-batch matching. Console and JSON reports record the selected timeout. CI requires a baseline with the same recorded timeout; older baselines without that field must be recorded again.
 
 The optional mitata suite measures complete lifecycle cycles, including cleanup, not `start()` alone. All measurements use warm process/filesystem caches; retained heap excludes native allocations and RSS deltas are process-wide. `--runs` controls lifecycle medians; latency phases are time-bounded and bursts run once per workload. A latency miss means the requested event kind was absent; alternative notifications are counted separately. Benchmark-only packages are pinned and installed outside the project. The updated timing methodology requires a new baseline; quick runs cannot update or check baselines.
 

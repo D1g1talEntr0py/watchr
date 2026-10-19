@@ -53,3 +53,17 @@ export function positiveInteger(value: string, name: string): number {
 
 	return parsed;
 }
+
+/**
+ * Parses a nonnegative numeric option without accepting empty or nonfinite values.
+ * @param value - Command-line value.
+ * @param name - Option name for diagnostics.
+ * @returns The finite nonnegative number.
+ */
+export function nonnegativeNumber(value: string, name: string): number {
+	const parsed = Number(value);
+
+	if (value.trim() === '' || !Number.isFinite(parsed) || parsed < 0) { throw new Error(`--${name} must be a finite nonnegative number`) }
+
+	return parsed;
+}

@@ -4,7 +4,7 @@ import { InodeType, FileSystemEvent, renameTimeout, DirectoryEvent, FileEvent } 
 import { FileSystemLocker } from './file-system-locker';
 import { FileSystemStateManager } from './file-system-state-manager';
 import type { WatchrStats } from './watchr-stats';
-import type { InodeNumber, LockEvent, Path, TargetEventEmitter } from './@types/index';
+import type { Closable, Event, InodeNumber, LockEvent, Path, TargetEventEmitter } from './@types/index';
 
 type LockConfig = {
 	inodeNumber?: InodeNumber,
@@ -23,7 +23,7 @@ type AnnouncedTarget = {
  * Handles file rename events
  * @internal
  */
-export class FileRenameHandler {
+export class FileRenameHandler implements Closable {
 	readonly #emitEvent: TargetEventEmitter;
 	readonly #emitError: (error: unknown) => boolean;
 	readonly #fileLocks: FileSystemLocker;
@@ -36,6 +36,7 @@ export class FileRenameHandler {
 	/** Rename destinations already emitted, retained until the counterpart notification arrives or expires. */
 	readonly #announcedTargets: Map<Path, AnnouncedTarget>;
 	static readonly #maxAnnouncedTargets: number = 50000;
+	#generation = 0;
 
 	/**
 	 * Creates an instance of FileRenameHandler.
@@ -63,6 +64,72 @@ export class FileRenameHandler {
 	}
 
 	/**
+	 * Classifies a completed batch before dispatch. Zero-timeout pairs use payload identity and emit at
+	 * the earlier pair slot; positive timeouts retain ordered, delayed cross-batch correlation.
+	 * @param events - Reconciled events whose state updates have all completed.
+	 * @param timeout - Optional delayed correlation window in milliseconds.
+	 * @param shouldContinue - Checked before each dispatch to honor synchronous closure.
+	 */
+	handleBatch(events: readonly Event[], timeout: number = renameTimeout, shouldContinue?: () => boolean): void {
+		const generation = this.#generation;
+		const changedPaths = new Set<Path>();
+		for (const [ type, path ] of events) {
+			if (type === FileSystemEvent.CHANGE) {
+				changedPaths.add(path);
+				changedPaths.add(resolve(path));
+			}
+		}
+
+		if (timeout > 0) {
+			for (const [ type, path, stats ] of events) {
+				if (generation !== this.#generation || shouldContinue?.() === false) { return }
+				if (type === FileSystemEvent.CHANGE) {
+					this.handleChange(path, stats);
+				} else {
+					this.getLockTargetEvent(type, path, stats, timeout, changedPaths);
+				}
+			}
+			return;
+		}
+
+		const groups = new Map<string, { adds: number[], unlinks: number[] }>();
+		const pathCounts = new Map<Path, number>();
+		for (const [ index, [ type, path, stats ] ] of events.entries()) {
+			pathCounts.set(path, (pathCounts.get(path) ?? 0) + 1);
+			const adding = type === FileSystemEvent.ADD || type === FileSystemEvent.ADD_DIR;
+			const removing = type === FileSystemEvent.UNLINK || type === FileSystemEvent.UNLINK_DIR;
+			if ((!adding && !removing) || !stats.inodeNumber || stats.inodeNumber < 0) { continue }
+			const directory = type === FileSystemEvent.ADD_DIR || type === FileSystemEvent.UNLINK_DIR;
+			const key = `${directory ? InodeType.DIR : InodeType.FILE}:${stats.inodeNumber}`;
+			let group = groups.get(key);
+			if (group === undefined) {
+				group = { adds: [], unlinks: [] };
+				groups.set(key, group);
+			}
+			(adding ? group.adds : group.unlinks).push(index);
+		}
+
+		const replacements = new Map<number, Event>();
+		const skipped = new Set<number>();
+		for (const { adds, unlinks } of groups.values()) {
+			if (adds.length !== 1 || unlinks.length !== 1) { continue }
+			const addIndex = adds[0]!;
+			const unlinkIndex = unlinks[0]!;
+			const [ addType, to, stats ] = events[addIndex]!;
+			const [ , from ] = events[unlinkIndex]!;
+			if (from === to || pathCounts.get(from) !== 1 || pathCounts.get(to) !== 1 || changedPaths.has(resolve(to)) || changedPaths.has(resolve(from))) { continue }
+			if (this.#fileSystemStateManager.paths.find(stats.inodeNumber, (path) => path !== to) !== undefined) { continue }
+			replacements.set(Math.min(addIndex, unlinkIndex), [ addType === FileSystemEvent.ADD_DIR ? FileSystemEvent.RENAME_DIR : FileSystemEvent.RENAME, from, stats, to ]);
+			skipped.add(Math.max(addIndex, unlinkIndex));
+		}
+
+		for (const [ index, event ] of events.entries()) {
+			if (generation !== this.#generation || shouldContinue?.() === false) { return }
+			if (!skipped.has(index)) { this.#emitEvent(...(replacements.get(index) ?? event)) }
+		}
+	}
+
+	/**
 	 * Gets the lock target event for a file system event.
 	 * @param event - The file system event.
 	 * @param targetPath - The target path of the event.
@@ -72,6 +139,10 @@ export class FileRenameHandler {
 	 * @returns void
 	 */
 	getLockTargetEvent(event: FileSystemEvent, targetPath: Path, stats: WatchrStats, timeout?: number, changedPaths?: ReadonlySet<Path>): void {
+		if ((timeout ?? renameTimeout) <= 0) {
+			this.#emitEvent(event, targetPath, stats);
+			return;
+		}
 		const canonicalChangedPaths = this.#getCanonicalChangedPaths(changedPaths);
 
 		switch (event) {
@@ -152,12 +223,23 @@ export class FileRenameHandler {
 	 * Resets the lock resolver.
 	 */
 	reset(): void {
+		this.#generation++;
 		this.#lockResolver.reset();
 		this.#fileSystemStateManager.reset();
 		this.#directoryLocks.reset();
 		this.#fileLocks.reset();
 		this.#pendingAdds.clear();
 		this.#announcedTargets.clear();
+	}
+
+	/** Releases delayed locks and tracked file state synchronously. */
+	close(): void {
+		this.reset();
+	}
+
+	/** Closes the handler on scope exit. */
+	[Symbol.dispose](): void {
+		this.close();
 	}
 
 	/**

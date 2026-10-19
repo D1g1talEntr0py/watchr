@@ -1,4 +1,4 @@
-import type { Resolver } from './@types/index';
+import type { Closable, Resolver } from './@types/index';
 import { maxConcurrentStats } from './constants';
 
 /**
@@ -18,9 +18,9 @@ export class RetryQueue {
 	/**
 	 * Schedules a task to be retried.
 	 * @param signal Optional signal that cancels pending admission.
-	 * @returns A promise that resolves to a disposable lease for the admitted task.
+	 * @returns A promise that resolves to a closable lease for the admitted task.
 	 */
-	schedule(signal?: AbortSignal): Promise<Disposable> {
+	schedule(signal?: AbortSignal): Promise<Closable> {
 		return new Promise((resolve, reject): void => {
 			if (signal?.aborted) {
 				reject(new DOMException('The operation was aborted', 'AbortError'));
@@ -53,7 +53,7 @@ export class RetryQueue {
 					if (this.#pendingQueue.size) { this.#processQueue() }
 				};
 
-				resolve({ [Symbol.dispose]: release });
+				resolve({ close: release, [Symbol.dispose]: release });
 			};
 
 			signal?.addEventListener('abort', onAbort, { once: true });

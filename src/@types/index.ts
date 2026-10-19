@@ -115,7 +115,7 @@ export type WatchrConfig = {
 	filePath?: Path;
 	initial?: boolean;
 	nodeHandler?: NodeEventHandler;
-	eventManager?: { cleanup: () => void };
+	eventManager?: Closable;
 };
 
 type WatchrOptions = {
@@ -126,11 +126,22 @@ type WatchrOptions = {
 	 */
 	recursive?: boolean;
 	ignore?: WatchIgnore;
-	/** Whether initial inventory is delivered before startup resolves. Defaults to false. */
+	/** Whether initial inventory is delivered before startup resolves, bypassing rename correlation. Defaults to false. */
 	emitInitial?: boolean;
 	/** Callbacks copied at construction and released on close. */
 	handlers?: WatchrHandlers;
-	// TODO: Having a timeout for these sorts of things isn't exactly reliable, but what's the better option?
+	/**
+	 * Rename correlation timeout in milliseconds. Defaults to 0 (no correlation wait).
+	 * Zero matches only unambiguous one-to-one removal/addition pairs within the same completed batch,
+	 * with the same inode and kind (file or directory) and different paths. Same-path replacements,
+	 * hard-link cases and ambiguous pairs remain unpaired. Pairs split across batches emit separate
+	 * removal/addition events, without a later post-hoc rename notification.
+	 * Start with 25 ms for timed cross-batch correlation and increase it if your workload needs a longer window.
+	 * A positive value opts into timed cross-batch correlation: unmatched removals
+	 * are delayed and additions with recently vacated inodes can be held; brand-new inodes are not held.
+	 * Changes during a held addition fold into it; a transient addition removed before delivery can be suppressed.
+	 * Native notification coalescing and inode reuse limit reliability. Initial inventory bypasses correlation.
+	 */
   renameTimeout?: number;
 	/**
 	 * Timeout in milliseconds for each stat performed while polling live watcher events.

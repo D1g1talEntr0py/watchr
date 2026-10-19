@@ -74,6 +74,7 @@ function createWatcher(target: Path | Path[], options: WatchrOptions = {}): Watc
 	};
 	const userHandlers = Object.fromEntries(Object.entries(options.handlers ?? {}).map(([ name, entry ]) => [ name, typeof entry === 'function' || entry === undefined ? entry : { ...entry } ])) as NonNullable<WatchrOptions['handlers']>;
 	const watcher = new Watchr(target, {
+		renameTimeout: 0,
 		...options,
 		handlers: {
 			...userHandlers,

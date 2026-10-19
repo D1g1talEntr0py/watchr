@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rename, rm, stat, writeFile } from 'node:fs/promises';
 import type { FSWatcher } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
@@ -21,6 +21,7 @@ async function createRoot(): Promise<string> {
 afterEach(async () => {
 	for (const watcher of watchers.splice(0)) { watcher.close() }
 	await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+	vi.useRealTimers();
 	vi.restoreAllMocks();
 });
 
@@ -223,6 +224,38 @@ describe('configured watcher lifecycle', () => {
 		expect(all).not.toHaveBeenCalled();
 	});
 
+	it.each([ false, true ])('cancels a pending initial state update without stale delivery (emitInitial=%s)', async (emitInitial) => {
+		const root = await createRoot();
+		await writeFile(join(root, 'entry'), 'value');
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const update = FileSystemStateManager.prototype.update;
+		let updateSignal: AbortSignal | undefined;
+		vi.spyOn(FileSystemStateManager.prototype, 'update').mockImplementation(async function (this: FileSystemStateManager, path, options) {
+			const pending = update.call(this, path, options);
+			if (path === root && options?.sync === true) {
+				updateSignal = options.signal;
+				entered.resolve();
+				await release.promise;
+			}
+			return pending;
+		});
+		const all = vi.fn();
+		const error = vi.fn();
+		const watcher = new Watchr(root, { emitInitial, handlers: { all, error } });
+		watchers.push(watcher);
+		const rejected = expect(watcher.start()).rejects.toThrow(/closed/);
+		await entered.promise;
+		watcher.close();
+		expect(updateSignal?.aborted).toBe(true);
+		release.resolve();
+		await rejected;
+		await new Promise(setImmediate);
+		expect(watcher.state).toBe('closed');
+		expect(all).not.toHaveBeenCalled();
+		expect(error).not.toHaveBeenCalled();
+	});
+
 	it('stops delivery immediately when an initial callback closes the watcher', async () => {
 		const root = await createRoot();
 		await writeFile(join(root, 'entry'), 'value');
@@ -418,10 +451,86 @@ describe('configured watcher lifecycle', () => {
 		expect(await ignored.start()).toBe(ignored);
 	});
 
+	it.each([
+		[ 'file', undefined ], [ 'file', 0 ], [ 'file', 25 ],
+		[ 'directory', undefined ], [ 'directory', 0 ], [ 'directory', 25 ]
+	] as const)('applies the public split-batch rename policy for %s with renameTimeout=%s', async (kind, renameTimeout) => {
+		vi.useFakeTimers({ toFake: [ 'setTimeout', 'clearTimeout', 'performance' ] });
+		const root = await createRoot();
+		const outside = await createRoot();
+		const from = join(root, 'from');
+		const to = join(root, 'to');
+		const parked = join(outside, 'parked');
+		const marker = join(root, 'marker');
+		if (kind === 'directory') { await mkdir(from) }
+		else { await writeFile(from, 'value') }
+		await writeFile(marker, 'marker');
+		const inode = Number((await stat(from, { bigint: true })).ino);
+		const original = FileSystemEventManager.newInstance;
+		let notify: (name: string) => void;
+		vi.spyOn(FileSystemEventManager, 'newInstance').mockImplementation((poller, owner, config, hooks) => {
+			const emit = config.watcher.emit.bind(config.watcher);
+			vi.spyOn(config.watcher, 'emit').mockReturnValue(false);
+			notify = (name) => { emit('change', 'change', name) };
+			return original(poller, owner, config, hooks);
+		});
+		const events: WatchrEvent[] = [];
+		let barrier = Promise.withResolvers<void>();
+		const error = vi.fn();
+		const watcher = new Watchr(root, { ...(renameTimeout === undefined ? {} : { renameTimeout }), handlers: {
+			all: (event) => {
+				if ('path' in event && event.path === marker) { barrier.resolve() }
+				else { events.push(event) }
+			},
+			error
+		} });
+		watchers.push(watcher);
+		await watcher.start();
+		expect(events).toEqual([]);
+		const clock = performance.now();
+		await rename(from, parked);
+		await writeFile(marker, 'first marker batch');
+		notify!('from');
+		notify!('marker');
+		await barrier.promise;
+		await new Promise(setImmediate);
+		expect(performance.now()).toBe(clock);
+		const removal = kind === 'directory' ? 'unlinkDir' : 'unlink';
+		const addition = kind === 'directory' ? 'addDir' : 'add';
+		if (renameTimeout === 25) { expect(events).toEqual([]) }
+		else { expect(events).toEqual([ expect.objectContaining({ type: removal, path: from, initial: false }) ]) }
+
+		barrier = Promise.withResolvers<void>();
+		await rename(parked, to);
+		await writeFile(marker, 'second marker batch with a different size');
+		notify!('to');
+		notify!('marker');
+		await barrier.promise;
+		await new Promise(setImmediate);
+		expect(performance.now()).toBe(clock);
+		let expected = [
+			expect.objectContaining({ type: removal, path: from, initial: false }),
+			expect.objectContaining({ type: addition, path: to, initial: false })
+		];
+		if (renameTimeout === 25) { expected = [ expect.objectContaining({ type: kind === 'directory' ? 'renameDir' : 'rename', from, to, initial: false }) ] }
+		expect(events).toEqual(expected);
+		expect(events.every((event) => Object.isFrozen(event) && event.stats instanceof WatchrStats && !event.stats.isSynthetic && event.stats.inodeNumber === inode)).toBe(true);
+		await vi.advanceTimersByTimeAsync(1000);
+		barrier = Promise.withResolvers<void>();
+		await writeFile(marker, 'final marker');
+		notify!('from');
+		notify!('to');
+		notify!('marker');
+		await barrier.promise;
+		await new Promise(setImmediate);
+		expect(events).toEqual(expected);
+		expect(error).not.toHaveBeenCalled();
+	});
+
 	it('preserves live add, rename and removal payloads with explicit noninitial provenance', async () => {
 		const root = await createRoot();
 		const events: WatchrEvent[] = [];
-		const watcher = new Watchr(root, { handlers: { all: (event) => { events.push(event) } } });
+		const watcher = new Watchr(root, { renameTimeout: 25, handlers: { all: (event) => { events.push(event) } } });
 		watchers.push(watcher);
 		await watcher.start();
 		const from = join(root, 'from');
@@ -435,19 +544,20 @@ describe('configured watcher lifecycle', () => {
 		expect(events.every((event) => event.initial === false && event.stats instanceof WatchrStats)).toBe(true);
 	});
 
-	it('classifies root recovery inventory as live rather than initial discovery', async () => {
+	it.each([ false, true ])('classifies root recovery inventory as live rather than initial discovery (emitInitial=%s)', async (emitInitial) => {
 		const root = await createRoot();
 		const events: WatchrEvent[] = [];
-		const watcher = new Watchr(root, { emitInitial: true, handlers: { all: (event) => { events.push(event) } } });
+		const watcher = new Watchr(root, { emitInitial, handlers: { all: (event) => { events.push(event) } } });
 		watchers.push(watcher);
 		await watcher.start();
-		expect(events).toHaveLength(1);
-		expect(events[0]!.initial).toBe(true);
+		expect(events).toHaveLength(emitInitial ? 1 : 0);
+		if (emitInitial) { expect(events[0]!.initial).toBe(true) }
+		events.length = 0;
 		await rm(root, { recursive: true });
 		await vi.waitFor(() => expect(events.some((event) => event.type === 'unlinkDir')).toBe(true));
 		await mkdir(root);
 		await writeFile(join(root, 'recovered'), 'value');
 		await vi.waitFor(() => expect(events.some((event) => event.type === 'add' && event.path === join(root, 'recovered'))).toBe(true));
-		expect(events.slice(1).every((event) => event.initial === false)).toBe(true);
+		expect(events.every((event) => event.initial === false)).toBe(true);
 	});
 });

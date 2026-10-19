@@ -1,5 +1,5 @@
-/** Default rename timeout in milliseconds */
-const renameTimeout = 150;
+/** Default rename timeout in milliseconds; zero correlates only completed batches. */
+const renameTimeout = 0;
 
 /** Default per-stat timeout in milliseconds for live polls */
 const statTimeout = 1000;

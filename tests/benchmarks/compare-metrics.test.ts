@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { deliveryCounts, measureLifecycle, positiveInteger } from './utils/compare-metrics.ts';
+import { deliveryCounts, measureLifecycle, nonnegativeNumber, positiveInteger } from './utils/compare-metrics.ts';
 
 describe('comparison benchmark metrics', () => {
 	it('times construction, startup and close without timing inspection', async () => {
@@ -52,5 +52,13 @@ describe('comparison benchmark metrics', () => {
 
 	it.each([ '0', '-1', '1.5', 'NaN', 'Infinity', '9007199254740992' ])('rejects invalid workload size %s', (value) => {
 		expect(() => positiveInteger(value, 'ops')).toThrow('--ops must be a positive safe integer');
+	});
+
+	it.each([ '0', '0.5', '10', '150' ])('accepts rename timeout %s', (value) => {
+		expect(nonnegativeNumber(value, 'rename-timeout')).toBe(Number(value));
+	});
+
+	it.each([ '', ' ', '-1', 'NaN', 'Infinity', '-Infinity', '1e309', 'invalid' ])('rejects invalid rename timeout %s', (value) => {
+		expect(() => nonnegativeNumber(value, 'rename-timeout')).toThrow('--rename-timeout must be a finite nonnegative number');
 	});
 });

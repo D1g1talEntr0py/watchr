@@ -81,7 +81,7 @@ describe.skipIf(skipReason !== '')(`memory budgets${skipReason ? ` (skipped: ${s
 		for (let round = 0; round < 3; round++) {
 			writeFileSync(join(probes, `r${round}.txt`), 'tracked');
 		}
-		const watcher = await createReadyWatcher(root, { emitInitial: false, renameTimeout: 20 });
+		const watcher = await createReadyWatcher(root, { emitInitial: false, renameTimeout: 0 });
 		const errors: Error[] = [];
 		observeEvent(watcher, 'error', (error: Error) => errors.push(error));
 

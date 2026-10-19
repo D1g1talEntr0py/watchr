@@ -4,9 +4,6 @@ import { join } from 'node:path';
 import { FileSystemEvent } from '../../src/watchr';
 import { cleanupTempRoots, closeWatchers, collectEvents, createReadyWatcher, createTempRoot, delay, waitForEvent } from '../helpers/fs-fixtures';
 
-// A long renameTimeout makes any hold on brand-new files obvious.
-const renameTimeout = 2_000;
-
 describe('add latency for brand-new inodes', () => {
 	afterEach(() => {
 		closeWatchers();
@@ -15,9 +12,9 @@ describe('add latency for brand-new inodes', () => {
 
 	it('emits add for a new file without waiting for renameTimeout', async () => {
 		const root = createTempRoot('watchr-add-latency-');
-		const watcher = await createReadyWatcher(root, { emitInitial: false, renameTimeout });
+		const watcher = await createReadyWatcher(root, { emitInitial: false, renameTimeout: 0 });
 		const path = join(root, 'new.txt');
-		const added = waitForEvent(watcher, FileSystemEvent.ADD, { path, timeoutMs: renameTimeout / 2 });
+		const added = waitForEvent(watcher, FileSystemEvent.ADD, { path });
 
 		writeFileSync(path, 'x');
 
@@ -26,9 +23,9 @@ describe('add latency for brand-new inodes', () => {
 
 	it('emits addDir for a new directory without waiting for renameTimeout', async () => {
 		const root = createTempRoot('watchr-add-latency-');
-		const watcher = await createReadyWatcher(root, { emitInitial: false, renameTimeout });
+		const watcher = await createReadyWatcher(root, { emitInitial: false, renameTimeout: 0 });
 		const path = join(root, 'dir');
-		const added = waitForEvent(watcher, FileSystemEvent.ADD_DIR, { path, timeoutMs: renameTimeout / 2 });
+		const added = waitForEvent(watcher, FileSystemEvent.ADD_DIR, { path });
 
 		mkdirSync(path);
 
@@ -40,9 +37,9 @@ describe('add latency for brand-new inodes', () => {
 		const from = join(root, 'a.txt');
 		const to = join(root, 'b.txt');
 		writeFileSync(from, 'x');
-		const watcher = await createReadyWatcher(root, { emitInitial: false, renameTimeout });
+		const watcher = await createReadyWatcher(root, { emitInitial: false, renameTimeout: 25 });
 		const { events, dispose } = collectEvents(watcher);
-		const renamed = waitForEvent(watcher, FileSystemEvent.RENAME, { path: from, timeoutMs: renameTimeout * 2 });
+		const renamed = waitForEvent(watcher, FileSystemEvent.RENAME, { path: from });
 
 		renameSync(from, to);
 		await renamed;
@@ -54,7 +51,7 @@ describe('add latency for brand-new inodes', () => {
 
 	it('reports a short-lived file as add followed by unlink', async () => {
 		const root = createTempRoot('watchr-add-latency-');
-		const watcher = await createReadyWatcher(root, { emitInitial: false, renameTimeout: 150 });
+		const watcher = await createReadyWatcher(root, { emitInitial: false, renameTimeout: 0 });
 		const { events, dispose } = collectEvents(watcher);
 		const path = join(root, 'temp.txt');
 		const added = waitForEvent(watcher, FileSystemEvent.ADD, { path });

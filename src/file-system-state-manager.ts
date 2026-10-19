@@ -1,3 +1,4 @@
+import { EvictingCache } from 'evicting-cache';
 import { SetMultiMap } from './set-multi-map';
 import { FileSystem } from './file-system';
 import { WatchrStats } from './watchr-stats';
@@ -11,18 +12,15 @@ type InodeEntry = { inodeNumber: InodeNumber, inodeType: InodeType };
  * @internal
  */
 export class FileSystemStateManager {
-	static readonly #maxTrackedEventInodes: number = 50000;
-	/**
-	 * Last inode seen per (event, path), keyed by `${event}\0${path}`.
-	 * Map insertion order doubles as the LRU order: touching an entry deletes and re-inserts it.
-	 */
-	readonly #targetInodes = new Map<string, InodeEntry>();
+	#vacatedRetentionMs: number = renameTimeout;
+	#generation = 0;
+	static readonly #maxTrackedEventInodes: number = 50_000;
+	/** Last inode seen per (event, path), keyed by `${event}\0${path}`. */
+	readonly #targetInodes = new EvictingCache<string, InodeEntry>(FileSystemStateManager.#maxTrackedEventInodes);
 	readonly #paths = new SetMultiMap<InodeNumber, Path>();
 	readonly #stats = new Map<Path, WatchrStats>();
 	/** When each inode last lost a tracked path, oldest first; lets an add tell a possible rename target from a new file. */
 	readonly #vacatedInodes = new Map<InodeNumber, number>();
-	#vacatedRetentionMs: number = renameTimeout;
-	#generation = 0;
 
 	/**
 	 * Gets the paths being watched.
@@ -48,11 +46,18 @@ export class FileSystemStateManager {
 	 * @returns The inode number if it exists, otherwise undefined.
 	 */
 	getInodeNumber(targetPath: Path, event: FileSystemEvent, type?: InodeType): InodeNumber | undefined {
-		const entry = this.#targetInodes.get(FileSystemStateManager.#inodeKey(event, targetPath));
+		const entry = this.#targetInodes.peek(FileSystemStateManager.#inodeKey(event, targetPath));
 
-		if (entry === undefined) { return undefined }
+		return entry === null || (type !== undefined && entry.inodeType !== type) ? undefined : entry.inodeNumber;
+	}
 
-		return type !== undefined && entry.inodeType !== type ? undefined : entry.inodeNumber;
+	/**
+	 * Configures retention before recording removals. Shared roots retain the largest configured window.
+	 * A zero window does not lower existing retention; configure positive windows before the first removal.
+	 * @param timeoutMs - The rename retention window in milliseconds.
+	 */
+	configureRenameTimeout(timeoutMs: number): void {
+		if (timeoutMs > this.#vacatedRetentionMs) { this.#vacatedRetentionMs = timeoutMs }
 	}
 
 	/**
@@ -62,7 +67,7 @@ export class FileSystemStateManager {
 	 * @returns True when the inode was vacated inside the window.
 	 */
 	wasVacatedWithin(inodeNumber: InodeNumber, windowMs: number): boolean {
-		if (windowMs > this.#vacatedRetentionMs) { this.#vacatedRetentionMs = windowMs }
+		this.configureRenameTimeout(windowMs);
 
 		const vacatedAt = this.#vacatedInodes.get(inodeNumber);
 
@@ -89,9 +94,7 @@ export class FileSystemStateManager {
 		const generation = this.#generation;
 		let nextStats: WatchrStats | undefined;
 
-		try {
-			nextStats = await this.#getStats(targetPath, options);
-		} catch (error: unknown) {
+		try { nextStats = await this.#getStats(targetPath, options) } catch (error: unknown) {
 			if (generation !== this.#generation) { return [] }
 
 			throw error;
@@ -145,9 +148,7 @@ export class FileSystemStateManager {
 	 * @param events - The events with their associated stats.
 	 */
 	#updateInodes(targetPath: Path, events: StateEvent[]) {
-		for (const event of events) {
-			this.#updateInode(targetPath, event.type, event.stats);
-		}
+		for (const event of events) { this.#updateInode(targetPath, event.type, event.stats) }
 	}
 
 	/**
@@ -188,35 +189,7 @@ export class FileSystemStateManager {
 	 * @param stats - The stats for the path.
 	 */
 	#updateInode(targetPath: Path, event: FileSystemEvent, stats: WatchrStats) {
-		const key = FileSystemStateManager.#inodeKey(event, targetPath);
-		const inodeType = stats.isFile() ? InodeType.FILE : InodeType.DIR;
-		const existingEntry = this.#targetInodes.get(key);
-
-		if (existingEntry !== undefined) {
-			existingEntry.inodeNumber = stats.inodeNumber;
-			existingEntry.inodeType = inodeType;
-			// Re-insert to move the entry to the most-recently-used end.
-			this.#targetInodes.delete(key);
-			this.#targetInodes.set(key, existingEntry);
-
-			return;
-		}
-
-		this.#targetInodes.set(key, { inodeNumber: stats.inodeNumber, inodeType });
-		this.#pruneTrackedInodes();
-	}
-
-	/**
-	 * Prunes tracked inode events to keep memory bounded in long-running processes.
-	 */
-	#pruneTrackedInodes() {
-		while (this.#targetInodes.size > FileSystemStateManager.#maxTrackedEventInodes) {
-			const oldestKey = this.#targetInodes.keys().next().value;
-
-			if (oldestKey === undefined) { break }
-
-			this.#targetInodes.delete(oldestKey);
-		}
+		this.#targetInodes.put(FileSystemStateManager.#inodeKey(event, targetPath), { inodeNumber: stats.inodeNumber, inodeType: stats.isFile() ? InodeType.FILE : InodeType.DIR });
 	}
 
 	/**

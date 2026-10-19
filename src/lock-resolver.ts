@@ -1,4 +1,4 @@
-import type { Resolver } from './@types/index';
+import type { Closable, Resolver } from './@types/index';
 
 type LockResolverOptions = {
 	interval?: number,
@@ -6,6 +6,9 @@ type LockResolverOptions = {
 	/** Receives exceptions thrown by resolvers during a tick. */
 	onError: (error: unknown) => void
 };
+
+/** Node timers clamp delays above the signed 32-bit limit. */
+const maxTimerDelayMs = 2_147_483_647;
 
 /**
  * Default resolver error sink: surfaces the failure without turning a timer tick into an uncaught exception.
@@ -22,17 +25,17 @@ const warnOnResolverError = (error: unknown): void => {
 };
 
 /**
- * Registering a single interval scales much better than registering N timeouts
- * Timeouts are respected within the interval margin
+ * Shares one deadline timer across pending resolvers, or an explicitly configured interval.
  * @internal
  */
-export class LockResolver {
-	#intervalId: NodeJS.Timeout | undefined;
-	readonly #interval: number;
+export class LockResolver implements Closable {
+	#resolving: boolean = false;
+	#timerId: NodeJS.Timeout | undefined;
+	/** Lower bound on pending deadlines; cancellation can leave one harmless early wake-up instead of re-scanning. */
+	#nextDeadline: number = Infinity;
+	readonly #interval: number | undefined;
 	readonly #maxResolvers: number;
 	readonly #onError: (error: unknown) => void;
-	/** Earliest known deadline, used to skip full scans on ticks where nothing can be due. */
-	#nextDeadline: number = Infinity;
 	readonly #resolvers: Map<Resolver, { timestamp: number, onEvict?: () => void }> = new Map();
 
 	/**
@@ -40,7 +43,7 @@ export class LockResolver {
 	 * @param options - Error sink and optional timing and capacity overrides.
 	 */
 	constructor(options: LockResolverOptions) {
-		this.#interval = options.interval ?? 50;
+		this.#interval = options.interval;
 		this.#maxResolvers = options.maxResolvers ?? 50000;
 		this.#onError = options.onError;
 	}
@@ -64,9 +67,7 @@ export class LockResolver {
 				const oldestEntry = this.#resolvers.get(oldestResolver);
 				this.#resolvers.delete(oldestResolver);
 
-				try {
-					oldestEntry?.onEvict?.();
-				} catch (error) {
+				try { oldestEntry?.onEvict?.() } catch (error) {
 					evictionError = error;
 					evictionFailed = true;
 				}
@@ -75,9 +76,11 @@ export class LockResolver {
 
 		this.#resolvers.set(fn, { timestamp, ...(onEvict === undefined ? {} : { onEvict }) });
 
-		if (timestamp < this.#nextDeadline) { this.#nextDeadline = timestamp }
+		const earlier = timestamp < this.#nextDeadline;
 
-		this.#init();
+		if (earlier) { this.#nextDeadline = timestamp }
+
+		this.#init(earlier);
 
 		if (evictionFailed) { throw evictionError }
 	}
@@ -88,15 +91,8 @@ export class LockResolver {
 	 */
 	remove(fn: Resolver): void {
 		this.#resolvers.delete(fn);
-	}
 
-	/**
-	 * Initializes the lock resolver.
-	 */
-	#init() {
-		if (this.#intervalId) { return }
-
-		this.#intervalId = setInterval(() => this.#resolve(), this.#interval);
+		if (this.#interval === undefined && !this.#resolvers.size) { this.reset() }
 	}
 
 	/**
@@ -106,11 +102,48 @@ export class LockResolver {
 		this.#nextDeadline = Infinity;
 		this.#resolvers.clear();
 
-		if (!this.#intervalId) { return }
+		if (!this.#timerId) { return }
 
-		clearInterval(this.#intervalId);
+		clearTimeout(this.#timerId);
 
-		this.#intervalId = undefined;
+		this.#timerId = undefined;
+	}
+
+	/** Cancels pending resolvers and releases the shared timer. */
+	close(): void {
+		this.reset();
+	}
+
+	/** Closes the resolver on scope exit. */
+	[Symbol.dispose](): void {
+		this.reset();
+	}
+
+	/**
+	 * Initializes the lock resolver.
+	 * @param earlier - Whether a newly added deadline precedes the scheduled wake-up.
+	 */
+	#init(earlier: boolean = false) {
+		if (this.#resolving) { return }
+
+		if (this.#interval !== undefined) {
+			this.#timerId ??= setInterval(() => this.#resolve(), this.#interval);
+
+			return;
+		}
+
+		if (this.#timerId) {
+			if (!earlier) { return }
+
+			clearTimeout(this.#timerId);
+		}
+
+		if (this.#nextDeadline === Infinity) { return }
+
+		this.#timerId = setTimeout(() => {
+			this.#timerId = undefined;
+			this.#resolve();
+		}, Math.min(maxTimerDelayMs, Math.max(1, Math.ceil(this.#nextDeadline - performance.now()))));
 	}
 
 	/**
@@ -120,26 +153,29 @@ export class LockResolver {
 		const now = performance.now();
 
 		// Nothing can be due yet, so skip the scan entirely.
-		if (now < this.#nextDeadline) { return }
+		if (now < this.#nextDeadline) {
+			this.#init();
 
-		let nextDeadline = Infinity;
+			return;
+		}
+
+		this.#nextDeadline = Infinity;
+		this.#resolving = true;
 
 		for (const [ fn, { timestamp } ] of this.#resolvers) {
 			// Continue waiting...
 			if (timestamp > now) {
-				if (timestamp < nextDeadline) { nextDeadline = timestamp }
+				if (timestamp < this.#nextDeadline) { this.#nextDeadline = timestamp }
 
 				continue;
 			}
 
 			this.remove(fn);
 
-			try {
-				fn();
-			} catch (error: unknown) {
-				this.#reportResolverError(error);
-			}
+			try { fn() } catch (error: unknown) { this.#reportResolverError(error) }
 		}
+
+		this.#resolving = false;
 
 		if (!this.#resolvers.size) {
 			this.reset();
@@ -147,7 +183,7 @@ export class LockResolver {
 			return;
 		}
 
-		this.#nextDeadline = nextDeadline;
+		this.#init();
 	}
 
 	/**
@@ -155,10 +191,6 @@ export class LockResolver {
 	 * @param error - The exception thrown by a resolver.
 	 */
 	#reportResolverError(error: unknown): void {
-		try {
-			this.#onError(error);
-		} catch (sinkError: unknown) {
-			warnOnResolverError(sinkError);
-		}
+		try { this.#onError(error) } catch (sinkError: unknown) { warnOnResolverError(sinkError) }
 	}
 };

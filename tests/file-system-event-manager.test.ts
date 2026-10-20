@@ -51,7 +51,6 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 
 describe('Watchr native notification boundary', () => {
 	beforeEach(async () => {
-		vi.stubGlobal('process', { ...process, platform: 'linux' });
 		const actual = await vi.importActual<typeof import('node:fs')>('node:fs');
 		vi.mocked(stat).mockImplementation(actual.stat);
 	});
@@ -264,8 +263,7 @@ describe('Watchr native notification boundary', () => {
 		expect(events[0]).toMatchObject({ event: FileSystemEvent.CHANGE, path: file, initial: false, stats: { size: 16 } });
 	});
 
-	it.each([ 1, 2 ])('recovers macOS startup additions across %s roots without notifications and stops reconciling', async (rootCount) => {
-		vi.stubGlobal('process', { ...process, platform: 'darwin' });
+	it.runIf(process.platform === 'darwin').each([ 1, 2 ])('recovers macOS startup additions across %s roots without notifications and stops reconciling', async (rootCount) => {
 		vi.useFakeTimers({ toFake: [ 'setTimeout', 'clearTimeout' ] });
 		const roots = Array.from({ length: rootCount }, () => createTempRoot());
 		const watcher = await createReadyWatcher(roots, { emitInitial: false, persistent: false, renameTimeout: 0 });
@@ -351,8 +349,7 @@ describe('Watchr native notification boundary', () => {
 		expect(events.map(({ event, path }) => [ event, path ]).sort()).toEqual([[ FileSystemEvent.CHANGE, target ], [ FileSystemEvent.UNLINK, temporary ]].sort());
 	});
 
-	it('cancels macOS directory startup reconciliation on close', async () => {
-		vi.stubGlobal('process', { ...process, platform: 'darwin' });
+	it.runIf(process.platform === 'darwin')('cancels macOS directory startup reconciliation on close', async () => {
 		vi.useFakeTimers({ toFake: [ 'setTimeout', 'clearTimeout' ] });
 		const root = createTempRoot();
 		const watcher = await createReadyWatcher(root, { emitInitial: false, persistent: false });
@@ -368,8 +365,7 @@ describe('Watchr native notification boundary', () => {
 		expect(vi.getTimerCount()).toBe(0);
 	});
 
-	it('detects Windows root deletion through stat polling and releases the polling listener', async () => {
-		vi.stubGlobal('process', { ...process, platform: 'win32' });
+	it.runIf(process.platform === 'win32')('detects Windows root deletion through stat polling and releases the polling listener', async () => {
 		const root = createTempRoot();
 		const watcher = await createReadyWatcher(root, { emitInitial: false, renameTimeout: 0 });
 		const { events } = collectEvents(watcher);
@@ -387,8 +383,7 @@ describe('Watchr native notification boundary', () => {
 		expect(watcher.state).not.toBe('closed');
 	});
 
-	it('removes Windows root stat polling on close without waiting for deletion', async () => {
-		vi.stubGlobal('process', { ...process, platform: 'win32' });
+	it.runIf(process.platform === 'win32')('removes Windows root stat polling on close without waiting for deletion', async () => {
 		const root = createTempRoot();
 		const watcher = await createReadyWatcher(root, { emitInitial: false, persistent: false });
 		expect(watchFile).toHaveBeenCalledWith(root, { interval: 100, persistent: false }, expect.any(Function));
@@ -398,8 +393,7 @@ describe('Watchr native notification boundary', () => {
 		expect(unwatchFile).toHaveBeenCalledWith(root, listener);
 	});
 
-	it.each([ false, true ])('recovers a missed macOS file notification through stat polling (emitInitial=%s)', async (emitInitial) => {
-		vi.stubGlobal('process', { ...process, platform: 'darwin' });
+	it.runIf(process.platform === 'darwin').each([ false, true ])('recovers a missed macOS file notification through stat polling (emitInitial=%s)', async (emitInitial) => {
 		vi.useFakeTimers({ toFake: [ 'setInterval', 'clearInterval' ] });
 		const root = createTempRoot();
 		const file = join(root, 'watched.txt');
@@ -427,8 +421,10 @@ describe('Watchr native notification boundary', () => {
 		expect(events).toHaveLength(1);
 	});
 
-	it.each([ 'linux', 'darwin' ])('selects the native parent watcher mode for a file on %s and filters siblings', async (platform) => {
-		vi.stubGlobal('process', { ...process, platform });
+	it.each([ 'linux', 'darwin' ].filter((platform) => platform === process.platform))('selects the native parent watcher mode for a file on %s and filters siblings', async (platform) => {
+		// Any target stat still running on the threadpool can observe writeFileSync's truncation as an extra change.
+		vi.useFakeTimers({ toFake: [ 'setInterval', 'clearInterval' ] });
+		const actual = await vi.importActual<typeof import('node:fs')>('node:fs');
 		const root = createTempRoot();
 		const file = join(root, 'watched.txt');
 		const sibling = join(root, 'sibling.txt');
@@ -438,8 +434,14 @@ describe('Watchr native notification boundary', () => {
 		expect(watch).toHaveBeenCalledWith(root, expect.objectContaining({ recursive: platform === 'darwin' }), expect.any(Function));
 		const { events } = collectEvents(watcher);
 		const native = nativeWatchers.get(root)!;
+		const siblingStat = Promise.withResolvers<void>();
+		vi.mocked(stat).mockImplementationOnce((path, options, callback) => actual.stat(path, options, (error, stats) => {
+			callback(error, stats);
+			siblingStat.resolve();
+		}));
 		writeFileSync(sibling, 'changed sibling');
 		native.emit('change', 'change', 'sibling.txt');
+		await siblingStat.promise;
 		await settle();
 		expect(events).toEqual([]);
 		writeFileSync(file, 'changed watched file');
@@ -448,8 +450,7 @@ describe('Watchr native notification boundary', () => {
 		expect(events[0]).toMatchObject({ event: FileSystemEvent.CHANGE, path: file });
 	});
 
-	it.skipIf(process.platform === 'win32').each([ false, true ])('discovers coalesced macOS additions (named entry is ignored symlink=%s)', async (symlink) => {
-		vi.stubGlobal('process', { ...process, platform: 'darwin' });
+	it.runIf(process.platform === 'darwin').each([ false, true ])('discovers coalesced macOS additions (named entry is ignored symlink=%s)', async (symlink) => {
 		const root = createTempRoot();
 		const watcher = await createReadyWatcher(root, { emitInitial: false, followSymlinks: false, renameTimeout: 0 });
 		const { events } = collectEvents(watcher);
@@ -951,15 +952,14 @@ describe('Watchr native notification boundary', () => {
 		expect(watcher.state).not.toBe('closed');
 	});
 
-	it.each([
+	it.each(([
 		[ 'linux', false ],
 		[ 'linux', true ],
 		[ 'darwin', false ],
 		[ 'darwin', true ]
-	] as const)('correlates delayed rename notifications on %s (directory=%s)', async (platform, directory) => {
+	] as const).filter(([ platform ]) => platform === process.platform))('correlates delayed rename notifications on %s (directory=%s)', async (platform, directory) => {
 		vi.useFakeTimers({ toFake: [ 'setTimeout', 'clearTimeout', 'performance' ] });
 		vi.advanceTimersByTime(50);
-		vi.stubGlobal('process', { ...process, platform });
 		const root = createTempRoot();
 		const source = join(root, 'source');
 		const target = join(root, 'target');

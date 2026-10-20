@@ -94,8 +94,7 @@ describe('Watchr', () => {
 			watchr.close();
 		});
 
-		it('emits a one-time WATCHR_PLATFORM_TIER2 warning on win32', async () => {
-			vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+		it.runIf(process.platform === 'win32')('emits a one-time WATCHR_PLATFORM_TIER2 warning on win32', async () => {
 			const warningSpy = vi.spyOn(process, 'emitWarning').mockImplementation(() => undefined);
 			// A fresh module instance resets the module-level "already warned" flag.
 			vi.resetModules();
@@ -116,8 +115,7 @@ describe('Watchr', () => {
 			}
 		});
 
-		it('does not emit the platform warning on non-win32 platforms', () => {
-			vi.spyOn(process, 'platform', 'get').mockReturnValue('linux');
+		it.runIf(process.platform !== 'win32')('does not emit the platform warning on non-win32 platforms', () => {
 			const warningSpy = vi.spyOn(process, 'emitWarning').mockImplementation(() => undefined);
 			const watchr = createWatcher(testDir);
 

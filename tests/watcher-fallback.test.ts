@@ -49,7 +49,7 @@ describe('Watcher fallback', () => {
 		vi.useRealTimers();
 	});
 
-	describe('MacOSWatcherFallback', () => {
+	describe.runIf(process.platform === 'darwin')('MacOSWatcherFallback', () => {
 		it('starts only on request and reconciles at cumulative 100/350/850/1850ms', () => {
 			fallback = new MacOSWatcherFallback(configuration);
 			expect(vi.getTimerCount()).toBe(0);
@@ -138,7 +138,7 @@ describe('Watcher fallback', () => {
 		});
 	});
 
-	describe('WindowsWatcherFallback', () => {
+	describe.runIf(process.platform === 'win32')('WindowsWatcherFallback', () => {
 		it.each([ false, true, undefined ])('registers root polling only after startup (persistent=%s)', (persistent) => {
 			fallback = new WindowsWatcherFallback({ ...configuration, persistent });
 			expect(watchFile).not.toHaveBeenCalled();
@@ -204,7 +204,9 @@ describe('Watcher fallback', () => {
 		});
 	});
 
-	it.each([ MacOSWatcherFallback, WindowsWatcherFallback ])('supports using scope disposal for %s', (Fallback) => {
+	const platformFallbacks = ([ [ 'darwin', MacOSWatcherFallback ], [ 'win32', WindowsWatcherFallback ] ] as const).filter(([ platform ]) => platform === process.platform);
+
+	it.each(platformFallbacks)('supports using scope disposal on %s', (_platform, Fallback) => {
 		fallback = new Fallback(configuration);
 		const close = vi.spyOn(fallback, 'close');
 		{
@@ -219,7 +221,7 @@ describe('Watcher fallback', () => {
 		expect(controller.signal.aborted).toBe(false);
 	});
 
-	it.each([ MacOSWatcherFallback, WindowsWatcherFallback ])('does not start after disposal before setup for %s', (Fallback) => {
+	it.each(platformFallbacks)('does not start after disposal before setup on %s', (_platform, Fallback) => {
 		fallback = new Fallback(configuration);
 		fallback.close();
 		fallback.start();
@@ -228,21 +230,18 @@ describe('Watcher fallback', () => {
 	});
 
 	describe('createWatcherFallback', () => {
-		it.each([ 'linux', 'freebsd', 'aix' ])('does not allocate fallback or schedule work on %s', (platform) => {
-			vi.stubGlobal('process', { ...process, platform });
+		it.runIf(process.platform !== 'darwin' && process.platform !== 'win32')('does not allocate fallback or schedule work without a platform fallback', () => {
 			fallback = createWatcherFallback(configuration);
 			expect(fallback).toBeUndefined();
 			expect(watchFile).not.toHaveBeenCalled();
 			expect(vi.getTimerCount()).toBe(0);
 		});
 
-		it.each([ 'darwin', 'win32' ])('selects %s once without starting fallback', (platform) => {
-			vi.stubGlobal('process', { ...process, platform });
+		it.each([ 'darwin', 'win32' ].filter((platform) => platform === process.platform))('selects %s once without starting fallback', (platform) => {
 			fallback = createWatcherFallback(configuration);
 			expect(fallback).toBeInstanceOf(platform === 'darwin' ? MacOSWatcherFallback : WindowsWatcherFallback);
 			expect(watchFile).not.toHaveBeenCalled();
 			expect(vi.getTimerCount()).toBe(0);
-			vi.stubGlobal('process', { ...process, platform: 'linux' });
 			fallback!.start();
 			if (platform === 'darwin') {
 				expect(vi.getTimerCount()).toBe(1);

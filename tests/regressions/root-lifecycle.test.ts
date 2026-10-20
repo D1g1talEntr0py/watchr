@@ -66,12 +66,13 @@ describe('regression B3: watched root removed and recreated', () => {
 		expect(errors).toEqual([]);
 	});
 
-	it.each([
+	// Windows refuses to rename a directory while a descendant directory holds an open watch handle.
+	it.each(([
 		[ 'parent-first', 'move' ],
 		[ 'child-first', 'move' ],
 		[ 'parent-first', 'delete' ],
 		[ 'child-first', 'delete' ]
-	] as const)('restores overlapping nonrecursive roots with native notifications (targets=%s, operation=%s)', async (targetOrder, operation) => {
+	] as const).filter(([ , operation ]) => process.platform !== 'win32' || operation !== 'move'))('restores overlapping nonrecursive roots with native notifications (targets=%s, operation=%s)', async (targetOrder, operation) => {
 		const outside = createTempRoot('watchr-overlapping-roots-');
 		const parent = join(outside, 'parent');
 		const child = join(parent, 'child');

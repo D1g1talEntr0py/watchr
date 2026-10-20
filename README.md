@@ -337,9 +337,9 @@ The [redesign validation report](docs/ux-refactor-validation.md) preserves origi
 | Tier | Platforms | Guarantee |
 |---|---|---|
 | 1 | Linux, macOS | CI-blocking; regressions are release blockers |
-| 2 | Windows | Best-effort; CI job is non-blocking; no SLA. WSL is recommended for Tier 1 behavior |
+| 2 | Windows | Best-effort; no SLA. WSL is recommended for Tier 1 behavior |
 
-On Windows the first `Watchr` constructed in a process emits a one-time `WatchrWarning` with code `WATCHR_PLATFORM_TIER2`; the Windows CI job runs the integration and regression suites but never blocks a merge.
+On Windows the first `Watchr` constructed in a process emits a one-time `WatchrWarning` with code `WATCHR_PLATFORM_TIER2`; the Windows CI job runs the integration and regression suites and must pass before a release.
 
 ## Requirements
 

@@ -54,9 +54,7 @@ jobs:
   bench:
     name: Benchmark regression check
     runs-on: ubuntu-latest
-    # Non-blocking: tests/benchmarks/baseline.json is per-machine; compare.ts downgrades to warnings when the
-    # baseline was recorded elsewhere, and hosted runners are noisy, hence the loose tolerance.
-    continue-on-error: true
+    # Baselines are per-machine: compare.ts downgrades regressions to warnings off the recording machine.
     permissions:
       contents: read
     steps:
@@ -70,10 +68,8 @@ jobs:
       - run: pnpm bench:ci --tolerance 0.5
 
   windows:
-    name: Windows (Tier 2, non-blocking)
+    name: Windows (Tier 2)
     runs-on: windows-latest
-    # Tier 2 canary: failures here never block a merge (see README "Platform Support").
-    continue-on-error: true
     permissions:
       contents: read
     steps:

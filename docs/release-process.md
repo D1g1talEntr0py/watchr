@@ -57,7 +57,7 @@ BREAKING CHANGE: Minimum Node.js version is now 24.6.0.
 git push -u origin feat/my-feature
 ```
 
-Open a PR targeting `main`. The CI workflow runs `pnpm audit --prod`, lint, type-check, tests with coverage thresholds, build, and the `dist/` typings smoke check across ubuntu and macOS × Node.js 24 and 26. A benchmark regression job (ubuntu, Node 26) and a Windows job (Tier 2) also run but are non-blocking. All blocking checks must pass.
+Open a PR targeting `main`. The CI workflow runs `pnpm audit --prod`, lint, type-check, tests with coverage thresholds, build, and the `dist/` typings smoke check across ubuntu and macOS × Node.js 24 and 26. A benchmark regression job (ubuntu, Node 26) and a Windows job (Tier 2) also run. Every CI job must pass.
 
 ### 4. Merge to `main`
 
@@ -68,7 +68,7 @@ Merge the PR (squash or merge commit — both work). The commit message(s) on `m
 
 ### 5. Automated Release (Hands-Off)
 
-After the merge, the `publish.yml` workflow triggers automatically. It installs git-cliff 2.14.0 from the workflow and does not add release tooling to `package.json`:
+After the merge, the `publish.yml` workflow triggers only when the CI workflow for that push to `main` completes successfully, and releases the exact commit CI tested. It installs git-cliff 2.14.0 from the workflow and does not add release tooling to `package.json`:
 
 1. Verifies conditions, including `pnpm audit --prod`
 2. Checks commits since the latest git tag and calculates the next version, or skips if there is no release-worthy change

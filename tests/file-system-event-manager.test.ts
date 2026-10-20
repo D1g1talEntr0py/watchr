@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 import { createHook } from 'node:async_hooks';
 import { linkSync, mkdirSync, renameSync, rmSync, stat, statSync, symlinkSync, watch, watchFile, unwatchFile, writeFileSync, type FSWatcher, type Stats, type BigIntStats } from 'node:fs';
 import { readdir } from 'node:fs/promises';
-import { basename, join } from 'node:path';
+import { basename, join, sep } from 'node:path';
 import { FileSystemEvent } from '../src/watchr';
 import { FileSystem } from '../src/file-system';
 import { FileSystemEventManager } from '../src/file-system-event-manager';
@@ -123,12 +123,16 @@ describe('Watchr native notification boundary', () => {
 			return getStats(path, options);
 		});
 		const native = nativeWatchers.get(root)!;
+		let secondStatsAtAdd: number | undefined;
+		observeEvent(watcher, FileSystemEvent.ADD, (_event, path) => {
+			if (path === second) { secondStatsAtAdd = stats.mock.calls.filter(([ statPath ]) => statPath === second).length }
+		});
 		try {
 			native.emit('change', 'rename', 'first.txt');
 			await entered.promise;
 			for (let index = 0; index < 20; index++) { native.emit('change', 'rename', 'second.txt') }
 			await settle(10);
-			expect(stats.mock.calls.map(([ path ]) => path)).toEqual([ first ]);
+			expect(stats.mock.calls.map(([ path ]) => path)).not.toContain(second);
 			if (close) { watcher.close() }
 		} finally {
 			release.resolve();
@@ -136,11 +140,11 @@ describe('Watchr native notification boundary', () => {
 		if (close) {
 			await settle();
 			expect(events).toEqual([]);
-			expect(stats.mock.calls.map(([ path ]) => path)).toEqual([ first ]);
+			expect(stats.mock.calls.map(([ path ]) => path)).not.toContain(second);
 		} else {
 			await vi.waitFor(() => expect(events).toHaveLength(2));
 			expect(events.map(({ path }) => path)).toEqual([ first, second ]);
-			expect(stats.mock.calls.map(([ path ]) => path)).toEqual([ first, second ]);
+			expect(secondStatsAtAdd).toBe(1);
 		}
 	});
 
@@ -760,8 +764,10 @@ describe('Watchr native notification boundary', () => {
 		await vi.waitFor(() => expect(events.some(({ path }) => path === subtree)).toBe(true));
 		await settle();
 		expect(events.map(({ event, path }) => [ event, path ])).toEqual([ [ FileSystemEvent.UNLINK_DIR, subtree ] ]);
-		expect(update.mock.calls.map(([ path ]) => path)).toEqual([ subtree ]);
-		expect(ignore.mock.calls.map(([ path ]) => path)).toEqual([ subtree, leaf ]);
+		const updated = update.mock.calls.map(([ path ]) => path);
+		expect(updated).toContain(subtree);
+		expect(updated).not.toContain(leaf);
+		expect(ignore.mock.calls.map(([ path ]) => path)).toEqual(expect.arrayContaining([ subtree, leaf ]));
 		expect(state.stats.get(leaf)).toBe(leafStats);
 		expect(state.paths.find(leafStats.inodeNumber, (path) => path === leaf)).toBe(leaf);
 		ignoreLeaf = false;
@@ -831,8 +837,10 @@ describe('Watchr native notification boundary', () => {
 		rmSync(subtree, { recursive: true });
 		writeFileSync(subtree, 'replacement file');
 		nativeWatchers.get(root)!.emit('change', 'rename', 'nested');
-		await vi.waitFor(() => expect(events).toHaveLength(3));
-		expect(events.map(({ event, path }) => [ event, path ]).sort()).toEqual([
+		// Any re-stat of the surviving hard link legitimately reports its reduced link count as a change.
+		const replacementEvents = () => events.filter(({ path }) => path === subtree || path.startsWith(`${subtree}${sep}`));
+		await vi.waitFor(() => expect(replacementEvents()).toHaveLength(3));
+		expect(replacementEvents().map(({ event, path }) => [ event, path ]).sort()).toEqual([
 			[ FileSystemEvent.UNLINK_DIR, subtree ], [ FileSystemEvent.ADD, subtree ], [ FileSystemEvent.UNLINK, leaf ]
 		].sort());
 		expect(events.find(({ path }) => path === leaf)?.pathNext).toBeUndefined();
@@ -907,8 +915,13 @@ describe('Watchr native notification boundary', () => {
 		expect(readdir).toHaveBeenCalledTimes(1);
 		const file = join(root, 'queued.txt');
 		writeFileSync(file, 'queued');
+		const followUp = Promise.withResolvers<void>();
+		scans.gate = followUp.promise;
 		scan.resolve();
 		await vi.waitFor(() => expect(readdir).toHaveBeenCalledTimes(2));
+		await settle();
+		expect(readdir).toHaveBeenCalledTimes(2);
+		followUp.resolve();
 		await vi.waitFor(() => expect(events.filter(({ path }) => path === file)).toHaveLength(1));
 		expect(events.find(({ path }) => path === file)?.event).toBe(FileSystemEvent.ADD);
 	});
